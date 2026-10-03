@@ -1,0 +1,9 @@
+[project]
+name = "atlas"
+version = "0.1.0"
+description = "Atlas: graph-memory, context management, and multi-agent orchestration for long-horizon tasks"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
