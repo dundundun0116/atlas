@@ -1,0 +1,18 @@
+# 第三方仓库克隆（评测基线，不入库）
+external/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+
+# 评测产物与缓存
+runs/
+cache/
+*.log
