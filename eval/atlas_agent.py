@@ -7,12 +7,18 @@
 """
 
 import os
+import sys
 from typing import Optional
 
-import requests
+# 让 eval venv 能导入仓库根的 atlas 包（入口脚本会 cd 到 external/，不保证根在 sys.path）
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-from agent.math import MathAgent
-from atlas.orchestration import WORKER_FALLBACK_PROMPT, Orchestrator
+import requests  # noqa: E402
+
+from agent.math import MathAgent  # noqa: E402
+from atlas.orchestration import WORKER_FALLBACK_PROMPT, Orchestrator  # noqa: E402
 
 WORKER_MAX_TOKENS = int(os.getenv("ATLAS_WORKER_MAX_TOKENS", "24000"))  # 解题（含推理）预算
 JSON_MAX_TOKENS = int(os.getenv("ATLAS_ROLE_JSON_MAX_TOKENS", "4000"))  # 机械性 JSON 调用预算
