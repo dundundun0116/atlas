@@ -78,7 +78,7 @@
 | M2 | 图状态记忆引擎 MVP + 结转式上下文管理 | 在 formal_reasoning 域胜过 long_context 对照 | 🟡 接入层已实现（LLM 结转提取器 + AtlasMemorySystem + 分派式 memory server，59 测试全绿）；待双臂跑分验证 |
 | M3 | 主评测跑分 + 类型学统计 | 成绩表、SR@k 曲线、类型学统计 | ⬜ |
 | M3.5 | 多智能体编排接入 + 编排效果评估 | 编排对照结果 | ⬜ |
-| M4 | 开源交付 | README、demo、复盘博客 | ⬜ |
+| M4 | 开源交付 | README、demo、复盘博客 | 🟡 README 正式版 + 架构图（D2/SVG）+ 离线 demo + 图快照导出 + 结果汇总工具已就绪；成绩表与复盘博客待 M3 |
 
 ## 9. 决策清单（v0.3，2026-10-03 逐项商定；#11–#14 于 2026-10-10 商定）
 
@@ -115,6 +115,7 @@
 
 ## 11. 进度日志（最新在上）
 
+- 2026-10-10（晚·二）：**M4 交付物起步 + 评测工具**——README 正式版（定位 / 问题 / 三个工作点 / 评测协议 / 快速开始 / 仓库结构 / 状态；成绩表留占位待 M3）+ 架构图（`docs/architecture.d2` → SVG，D2 elk 布局：runner → 记忆系统 → 编排）+ 离线 demo（`atlas/demo.py`：脚本化提取器跑旅行规划迷你会话，打印四区组装、导出图快照，无需 API 凭据）+ `eval/summarize.py`（复用官方 eval 口径，汇总各臂 PS / pass rate / memory_length 为 Markdown 表并写官方 all_results.json）。评测配置：三个 config 的 agent `max_tokens` 8192 → 32000（推理型模型空答案问题）；冒烟脚本支持 `SMOKE_SUBTASKS=<K>`（只跑前 K 个子任务）且冒烟不做断点续跑。TDD 86 测试全绿。
 - 2026-10-10（晚）：**M3.5 多智能体编排实现（决策 #15–#17）**——`atlas/orchestration.py`（固定三段式编排器：Planner 定路线写 Decision → Worker 解题写 Artifact 草稿 → Auditor 核验写 Fact 疑虑 → 需修订时 Worker 修订并作废草稿；LLM 与图客户端注入可测）+ `eval/atlas_agent.py`（OrchestratedMathAgent 挂官方 MathAgent，入口脚本按 config 一行替换；协调经 memory server 的 `/memory/state_view` 与 `/memory/role_note`；失败逐级降级：编排 → 单发 → 官方 act）+ 服务端角色图接口 + `eval/configs/math_atlas_orch.json`。**关键发现（顺带修复提取器）**：端点支持关推理（`thinking.type=disabled` / `reasoning_effort=none`，实测推理 token 归零、快一个数量级）→ 提取器关推理后从"17 分钟且空正文"变为 8.7s 正常抽取（真实长记录段实测）；机械性角色调用（Planner/Auditor）同关推理，解题（Worker/修订）保持推理且空正文时关推理重试一次。schema 补一类边：`SUPERSEDES` 允许 Artifact→Artifact。TDD 85 测试全绿；角色图接口端到端验证通过（D1/A1/F1/A2 + `A2 -supersedes-> A1`、actor 标记正确、state_view 含作废提示）。
 - 2026-10-10（下午·二）：**冒烟确认 + 提取器修复 + 图快照/CLI 起步（决策 #10）**——冒烟抓到三个真问题并修复：① runner 在首个 wrap 前会先 add "Initial result: Empty"，被当成待结转记录（白烧调用）→ 无子任务时直接丢弃；② 提取器空正文（推理 token 吃光 max_tokens）→ 提到 8000 + 空正文诊断日志；③ 记录段里的 `## Tool Calls Info` 是整段工具轨迹（上万字符）→ 按条 3500/全段 7000 字符截断保护。**提取器实测选型**：deepseek-v4.1-flash 在长记录段上推理失控（8000 token 全被推理吃光、单次 17 分钟、常以连接错误告终）、deepseek-flash 63s/推理 7111 token、mimo-v2.6-flash 33s/推理 398 token 且 JSON 合规 → 提取器默认改 mimo-v2.6-flash（ATLAS_EXTRACTOR_MODEL 可覆盖；agent/env 侧仍用 deepseek-v4.1-flash）。迷你会话 + 真实跑分冒烟确认：服务端结转通（`结转#1（S1）：applied=2 skipped=0`，无错误）。新增 `atlas/export.py`（自包含 SVG/HTML 渲染：类型分列、状态配色、边型线型；零依赖确定性输出）+ `atlas/cli.py`（`python -m atlas.cli export`）+ 图快照落盘（服务端 `ATLAS_GRAPH_DUMP_DIR` 默认 runs/graphs/）；8002 临时服务端到端验证（dump → 导出 → SVG 合法 XML）。TDD 72 测试全绿。
 - 2026-10-10（下午）：**M2 接入层实现（决策 #11–#14 落地）**——新增 `atlas/context/extractor.py`（LLM 结转提取器：严格 JSON、逐操作校验跳过、DEPENDS_ON 防环、supersede 作废、解析失败降级）、`atlas/service.py`（AtlasMemorySystem：每子任务边界结转、规则注册子任务/判分记录、H 区答错提示、组装失败降级为计划区）、`eval/atlas_memory_server.py`（单端口按 memory_system_name 分派 long_context/atlas，A/B 只差 config 一行；`lite_memory_server.py` 并入后删除）、`eval/configs/math_atlas.json`；双臂 judge 口径统一为 true（决策 #14），旧口径已跑那篇移至 `runs/stale_judge_false/` 存档待重跑；`run_math.sh` 支持传入 config。TDD 新增 17 测试（59 全绿）。跑分仍暂停（按用户指示，等续跑指令）。
