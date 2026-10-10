@@ -38,7 +38,7 @@ Planner → Worker → Auditor **固定三段式**：Planner 定路线（写 Dec
 - **对照臂**：`long_context`（官方基线：全历史截尾）／`atlas`（图状态记忆）／`atlas_orch`（+ 多智能体编排）；
 - **指标**：progress score（子任务正确率）、pass rate（末题正确）、SR@k、memory_length（上下文 token 数，即省 token 度量）。
 
-> 成绩表：跑分进行中（评测环境与三臂接入已就绪，数字待补）。
+> 成绩表：跑分进行中。评测环境与三臂接入已就绪，小批量链路验证已通过（2 子任务：答案非空、提取器正常入图、无错误），全量数字待补。
 
 | 臂 | progress score | pass rate | 平均上下文 tokens |
 |---|---|---|---|
@@ -82,9 +82,9 @@ SURVEY.md         调研笔记：三大工作点的顶会做法与可借鉴机�
 ## 状态
 
 - ✅ M0 精读（pi 源码 / MemoryArena 客户端 / MAGE 全文）
-- ✅ M1 评测环境（官方协议接入、三臂可跑、抽样子集协议）
+- ✅ M1 评测环境（官方协议接入、三臂可跑、抽样子集协议；小批量链路验证通过）
 - ✅ M2 图状态记忆 + 结转式上下文管理（含 MemoryArena 接入层）
 - ✅ M3.5 多智能体编排（Planner / Worker / Auditor，协调经共享图）
-- 🔄 M3 主评测跑分（数字待补）· M4 开源交付（README / demo / 复盘博客）
+- 🔄 M3 主评测跑分（三臂同清单；数字待补）· M4 开源交付（README / 架构图 / 离线 demo / 快照导出 / 复盘博客）
 
 细节见 [PROJECT.md](PROJECT.md)（决策清单与进度日志）、[SURVEY.md](SURVEY.md)（调研笔记）、[notes/MAGE-精读.md](notes/MAGE-精读.md)。
