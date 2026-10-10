@@ -4,7 +4,7 @@
 
 ## 组成
 
-- `atlas_memory_server.py`：memory server（端口 8000），按 `memory_system_name` 分派：`long_context` 复用官方 `LongContextMemorySystem`；`atlas` 用 `atlas/service.py` 的 `AtlasMemorySystem`（图引擎 + LLM 结转提取器 + 四区组装，预算默认 8000 tokens）。端点与官方 `memory/server.py` 一致，A/B 只差 config 一行。`ATLAS_EXTRACTOR_MODEL`（默认 deepseek-v4.1-flash）、`ATLAS_BUDGET_TOKENS` 可用环境变量覆盖。
+- `atlas_memory_server.py`：memory server（端口 8000），按 `memory_system_name` 分派：`long_context` 复用官方 `LongContextMemorySystem`；`atlas` / `atlas_orch` 用 `atlas/service.py` 的 `AtlasMemorySystem`（图引擎 + LLM 结转提取器 + 四区组装，预算默认 8000 tokens）；`mage` 用 `atlas/mage_baseline.py` 的 `MAGELiteMemorySystem`（MAGE 简化基线：子任务边界 LLM 叙事摘要累计，无图无预算，决策 #8）。端点与官方 `memory/server.py` 一致，A/B 只差 config 一行。`ATLAS_EXTRACTOR_MODEL`（默认 deepseek-v4.1-flash）、`ATLAS_BUDGET_TOKENS` 可用环境变量覆盖；`ATLAS_SERVER_PORT` 可另起实例（跑分进行中改代码时用，mage 臂当前跑在 8002）。
 - `opencode_compat/sitecustomize.py`：opencode go 兼容层。该端点要求客户端标识自身（User-Agent）并携带每会话稳定的 `x-opencode-session` 头（路由与前缀缓存优化，见 https://opencode.ai/docs/go/）。补丁经 `PYTHONPATH` 自动加载，仅在 `OPENCODE_COMPAT=1` 时生效，给所有 `openai.OpenAI` 客户端注入这两个头。
 - `start_servers.sh`：一键起 env server（:8001）+ memory server（:8000），从 `eval/.env` 读凭据，服务日志在 `runs/`。
 - `run_math.sh`：math 域跑分（带兼容层，断点续跑）；`eval/run_math.sh [config.json]`，默认 long_context 基线。
@@ -52,3 +52,5 @@ eval/run_math.sh eval/configs/math_atlas.json         # Atlas 臂（同一子集
   ```
 - **单篇冒烟**：`SMOKE_PAPER=<paper_name> eval/run_math.sh eval/configs/math_atlas.json`（结果隔离在 `runs/json/math_smoke/`，不污染正式跑分）。
 - **编排臂（M3.5，决策 #15–#17）**：`eval/run_math.sh eval/configs/math_atlas_orch.json`——同一 memory server（`memory_system_name=atlas_orch` 仅让结果落独立目录），`agent.orchestration=true` 使入口脚本把 runner 的 MathAgent 替换为编排 agent（Planner → Worker → Auditor → 必要时 Worker 修订）；角色经 `/memory/state_view`（读图）与 `/memory/role_note`（写图）协调，结论/疑虑落成节点（actor 标角色），修订作废草稿。推理开关：机械性 JSON 调用（提取器、Planner/Auditor）默认关推理（`ATLAS_EXTRACTOR_THINKING=on` 可恢复）；解题（Worker/修订）保持推理，预算 `ATLAS_WORKER_MAX_TOKENS`（默认 24000），空正文时自动关推理重试一次。
+- **MAGE 简化基线臂（决策 #8）**：`eval/run_math.sh eval/configs/math_mage.json`（memory server 跑在 8002，config 已指向）——叙事摘要记忆：每子任务边界 LLM 把上一子任务原始记录压成一条摘要（C 区累计、R 恒空），无图、无预算、无查账；与 Atlas 同边界结转、同 LLM，对照"叙事摘要 vs 结构化图"。摘要失败（空正文/异常）降级为截断原文，跑分不中断。
+- **小论文初步数字（缩减口径）**：`SUBSET_INDICES="39,36" eval/run_math.sh ...`——2 篇 9 子任务/臂，四臂同清单（long_context / atlas / atlas_orch / mage）；样本小仅作初步数字，效果方向明确可补测第 3 篇（索引 22）。

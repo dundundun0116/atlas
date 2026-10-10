@@ -22,6 +22,7 @@ import uvicorn
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+from atlas.mage_baseline import MAGELiteMemorySystem  # noqa: E402
 from atlas.service import AtlasMemorySystem  # noqa: E402
 
 # 按文件路径加载官方 long_context，绕开 memory_systems/__init__.py 的重型 eager import
@@ -166,6 +167,12 @@ def initialize(req: InitializeRequest):
             budget_tokens=BUDGET_TOKENS,
             dump_path=dump_path,
         )
+    elif req.memory_system_name == "mage":
+        # MAGE 简化基线（决策 #8）：叙事摘要记忆（C=子任务边界 LLM 摘要累计，R=空），
+        # 与 Atlas 同边界结转、同 LLM，对照"叙事摘要 vs 结构化图"这一假设
+        SYSTEMS[req.user_id] = MAGELiteMemorySystem(
+            req.user_id, llm=OpenAIChatLLM(), token_counter=count_tokens,
+        )
     else:
         raise HTTPException(
             status_code=400,
@@ -224,4 +231,5 @@ def role_note(req: RoleNoteRequest):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # 默认 8000；跑分进行中改代码时可用 ATLAS_SERVER_PORT 另起实例（如 8002），不动主服务
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("ATLAS_SERVER_PORT", "8000")))
