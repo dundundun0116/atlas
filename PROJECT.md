@@ -1,6 +1,6 @@
 # Atlas 项目概述
 
-> 状态：v0.3（2026-10-03）——选题与十项决策已商定（第 9 节）；M0 完成，M1 环境就绪（跑分待 API），M2 离线核心已实现（42 测试）。进度明细见第 11 节。
+> 状态：v0.3（2026-10-03）——选题与十项决策已商定（第 9 节）；M0 完成，M1 抽样跑分中断暂停（1/10 篇，代理故障已修，待续跑），M2 离线核心已实现（42 测试）。进度明细见第 11 节。
 
 ## 1. 一句话定位
 
@@ -74,7 +74,7 @@
 | 阶段 | 内容 | 产出 | 状态 |
 |---|---|---|---|
 | M0 | 精读：pi 源码 + MemoryArena 客户端 + MAGE 全文 | 挂接点清单、schema 裁剪输入 | ✅ 完成（2026-10-03，MAGE 笔记见 notes/） |
-| M1 | 评测环境跑通 + 对照组数字对齐 | 环境 ready | 🟡 抽样跑分执行中（决策 #7：n=10、seed=20261010，共 95 子任务；opencode go 通道） |
+| M1 | 评测环境跑通 + 对照组数字对齐 | 环境 ready | 🟡 抽样跑分中断暂停（1/10 篇完成；代理故障已修，断点续跑就绪，待用户指示） |
 | M2 | 图状态记忆引擎 MVP + 结转式上下文管理 | 在 formal_reasoning 域胜过 long_context 对照 | 🟡 离线核心已实现（引擎/组装器/结转，TDD 42 测试全绿）；待 LLM 结转提取器 + MemoryArena 接入 |
 | M3 | 主评测跑分 + 类型学统计 | 成绩表、SR@k 曲线、类型学统计 | ⬜ |
 | M3.5 | 多智能体编排接入 + 编排效果评估 | 编排对照结果 | ⬜ |
@@ -106,6 +106,7 @@
 
 ## 11. 进度日志（最新在上）
 
+- 2026-10-10：**M1 跑分中断诊断 + 代理修复入库**——抽样跑分在 1/10 篇（2312.05134_part_2：8 子任务，2/8 正确，平均 164s/子任务）后中断，根因：shell 继承的 `HTTP(S)_PROXY` 指向 Clash，而 config 本地服务地址写 `0.0.0.0`（不在 `NO_PROXY`）→ 对本地服务的请求误走代理，Clash 短暂不可用即全挂；进程随后消失（疑随会话回收）。修复：`run_math.sh`/`start_servers.sh` 补 `no_proxy` 旁路（0.0.0.0/127.0.0.1/localhost）、config 本地 base_url 改 `127.0.0.1`、README 补代理与 nohup 说明；正反两组验证通过（死代理下本地调用仍通）。**用户拍板：暂不续跑**（剩余 9 篇/87 子任务，断点续跑就绪）；M2 收尾按"先摊开设计再动手"推进（提取器与接入形态给选项待拍板）。附带记录上游两处怪癖：runner 尾部 `main()` 被调用两次（第二遍因断点续跑全跳过，无害）；`is_paper_correct` 取的是末题正确性。
 - 2026-10-10：**M1 抽样跑分启动（决策 #7）**——opencode go 通道接入完成：端点 `opencode.ai/zen/go/v1` 必须带 `x-opencode-session` 与自有 User-Agent 头（缺头 400），补 `eval/opencode_compat/sitecustomize.py` 自动注入，实测简单调用 ~2s（对比 NIM 的 98s）。**修正**：初次误按全量 40 篇启动（偏离决策 #7 的抽样协议，已停），改为固定子集 **n=10、seed=20261010**（清单落 `runs/subset_formal_reasoning_math_n10_seed20261010.txt`，共 95 个子任务；Atlas 对照跑用同一清单）。踩坑与修复：① HF hub 偶发失败会触发 datasets 库缓存回退 bug（split 被拼进 config 名→ValueError），wrapper 改为**本地缓存直载优先**（`run_math_subset.py`），完全绕开 hub 依赖；② 后台输出要 `python -u` 才可见。抽样跑分后台执行中（断点续跑）。
 - 2026-10-03（夜）：**M2 离线核心完成**——`atlas/memory/`（图引擎：六类节点/五类边/status 生命周期/决策变迁/JSONL 持久化）+ `atlas/context/`（四区组装器+动态预算+规则查账；结转触发+结转管理），TDD 42 测试全绿（24d4581）。测试抓到两个真问题：决策链回溯方向反了；Fact/Artifact 在组装结果无出口→计划区补"环境事实/产出物"两节。工作约定确立（做完即提交+更新文档，见 AGENTS.md）。
 - 2026-10-03（夜）：**M1 环境就绪**——MemoryArena 克隆至 external/；uv venv（Py3.12）+ math 域必需依赖；lite memory server（eval/lite_memory_server.py，复用官方 LongContextMemorySystem 类，端口 8000）；math 域数据集验证（40 任务，与 MAGE 口径一致）；long_context 配置模板（39beb97）。模型后端暂定 NVIDIA NIM deepseek-v4.1-flash（免费档，key 在 eval/.env），实测该端点延迟 ~98s/请求不可用，待用户切换 opencode go 订阅后跑 smoke + long_context 对齐。

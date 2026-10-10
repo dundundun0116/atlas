@@ -14,13 +14,13 @@
     "session_wise_memory": true,
     "judge_result_in_memory": false,
     "memory_system_name": "long_context",
-    "base_url": "http://0.0.0.0:8000",
+    "base_url": "http://127.0.0.1:8000",
     "timeout": 300
   },
 
   "env": {
     "env_name": "math",
-    "base_url": "http://0.0.0.0:8001",
+    "base_url": "http://127.0.0.1:8001",
     "timeout": 300,
     "env_config": {
       "model_name": "deepseek-v4.1-flash",

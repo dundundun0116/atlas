@@ -36,4 +36,5 @@ eval/run_math.sh
 - 数据加载：`run_math_subset.py` **本地缓存直载优先**（`~/.cache/huggingface/hub/datasets--ZexueHe--memoryarena/`），HF hub 仅作后备——直连偶发失败时 datasets 会走有 bug 的缓存回退路径（ValueError），本地直载完全绕开。
 - 历史：NVIDIA NIM 免费档实测延迟 ~98s/请求且 HTTP/2 不稳，已弃用；opencode go 实测 ~2s/请求（简单调用）。
 - opencode go 注意事项：直连即可（无需代理）；请求必须带 `x-opencode-session` 头（缺失会 400 `MissingSessionID`），兼容层已处理。
-- 后台运行请用 `python -u`（脚本已带），否则输出被块缓冲看不到进度。
+- 后台运行请用 `python -u`（脚本已带），否则输出被块缓冲看不到进度。长跑建议 `nohup eval/run_math.sh >> runs/math_run.log 2>&1 &`，并确认进程不挂在会被回收的会话下（2026-10-10 曾随会话回收中断一次）。
+- **代理注意**：本地服务地址一律用 `127.0.0.1`（config 已改），且 `run_math.sh`/`start_servers.sh` 会把 `0.0.0.0,127.0.0.1,localhost` 加入 `no_proxy`。原因是 shell 常带 `HTTP(S)_PROXY=127.0.0.1:7897`（Clash），而 `0.0.0.0` 不在系统 `NO_PROXY` 里，对本地服务的请求会被误发到代理——Clash 一挂，跑分全部报 ProxyError（2026-10-10 中断故障根因）。
