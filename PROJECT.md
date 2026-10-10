@@ -78,7 +78,7 @@
 | M2 | 图状态记忆引擎 MVP + 结转式上下文管理 | 在 formal_reasoning 域胜过 long_context 对照 | 🟡 接入层已实现 + 小批量真实跑分验证通过（结转 applied=2、图快照正确）；待双臂全量对照 |
 | M3 | 主评测跑分 + 类型学统计 | 成绩表、SR@k 曲线、类型学统计 | ⬜ 工具就绪（summarize.py 复用官方口径）；待跑（三臂同清单：long_context / atlas / atlas_orch） |
 | M3.5 | 多智能体编排接入 + 编排效果评估 | 编排对照结果 | 🟡 编排实现完成（决策 #15–#17，角色图接口端到端验证通过）；编排臂真实跑分待验证 |
-| M4 | 开源交付 | README、demo、复盘博客 | 🟡 README 正式版 + 架构图（D2/SVG）+ 离线 demo + 图快照导出 + 结果汇总工具已就绪；成绩表与复盘博客待 M3 |
+| M4 | 开源交付 | README、demo、复盘博客 | 🟡 README 正式版 + 架构图（D2/SVG）+ 离线 demo + streamlit 演示页 + 图快照导出 + 结果汇总工具 + 复盘博客草稿（成绩占位）已就绪；成绩表待跑分回填 |
 
 ## 9. 决策清单（v0.3，2026-10-03 逐项商定；#11–#17 于 2026-10-10 商定）
 
@@ -115,6 +115,7 @@
 
 ## 11. 进度日志（最新在上）
 
+- 2026-10-10（深夜）：**A/B 路线启动（用户拍板做 A+B）**——编排臂冒烟通过（`2507.18621`，2/2 正确，编排臂首次真实跑分验证）；三臂**3 篇小论文初步数字跑分后台进行中**（索引 39/36/22 = 2+7+7 子任务，`SUBSET_INDICES` 机制新增于 run_math_subset.py，顺序 39→36→22，基线臂先跑；预计数小时，断点续跑）；A 路线交付 streamlit 演示页（`atlas/demo_app.py`，AppTest 回归测试，87 测试全绿）+ 复盘博客草稿（`docs/blog-draft.md`，成绩占位）。**待办**：跑分完成后 `summarize.py` 出初步成绩表 → 回填 README 与博客。
 - 2026-10-10（夜）：**小批量验证通过 + 状态快照**——`SMOKE_SUBTASKS=2`（Atlas 臂，agent max_tokens 32000）：2 子任务 **1/2 正确**（st0 错 884s / st1 对 615s），答案均非空（693 / 1572 字符，空答案问题已解决）；结转 `applied=2 skipped=2`（护栏拦下 2 个非法操作）、提取器真实入图（`F1` Tate 界 / `A1` 结论，actor=extractor）、图快照落盘正常；汇总表（官方口径）PS 0.500 / pass rate 1.000 / 平均上下文 316 tokens（n=1 篇，仅验证链路，不作数字）。**当前状态**：M0 完成；M2 接入层完成并小批量验证通过；M3.5 编排实现完成（角色图接口端到端验证通过）；M4 交付物部分就绪（README / 架构图 / 离线 demo / 快照导出 / summarize）；TDD 86 测试全绿。**卡点**：端点吞吐波动约 10 倍（今早 164s/子任务 vs 晚间 300–1900s），全量 95 子任务/臂按晚间速度约 19 小时——待端点快时段或另定口径。**下一步（待用户拍板）**：A 继续交付物（streamlit 演示页 + 复盘博客草稿）；B 再挑 2–3 篇小论文攒初步数字；C 等快时段跑全量三臂。
 - 2026-10-10（晚·二）：**M4 交付物起步 + 评测工具**——README 正式版（定位 / 问题 / 三个工作点 / 评测协议 / 快速开始 / 仓库结构 / 状态；成绩表留占位待 M3）+ 架构图（`docs/architecture.d2` → SVG，D2 elk 布局：runner → 记忆系统 → 编排）+ 离线 demo（`atlas/demo.py`：脚本化提取器跑旅行规划迷你会话，打印四区组装、导出图快照，无需 API 凭据）+ `eval/summarize.py`（复用官方 eval 口径，汇总各臂 PS / pass rate / memory_length 为 Markdown 表并写官方 all_results.json）。评测配置：三个 config 的 agent `max_tokens` 8192 → 32000（推理型模型空答案问题）；冒烟脚本支持 `SMOKE_SUBTASKS=<K>`（只跑前 K 个子任务）且冒烟不做断点续跑。TDD 86 测试全绿。
 - 2026-10-10（晚）：**M3.5 多智能体编排实现（决策 #15–#17）**——`atlas/orchestration.py`（固定三段式编排器：Planner 定路线写 Decision → Worker 解题写 Artifact 草稿 → Auditor 核验写 Fact 疑虑 → 需修订时 Worker 修订并作废草稿；LLM 与图客户端注入可测）+ `eval/atlas_agent.py`（OrchestratedMathAgent 挂官方 MathAgent，入口脚本按 config 一行替换；协调经 memory server 的 `/memory/state_view` 与 `/memory/role_note`；失败逐级降级：编排 → 单发 → 官方 act）+ 服务端角色图接口 + `eval/configs/math_atlas_orch.json`。**关键发现（顺带修复提取器）**：端点支持关推理（`thinking.type=disabled` / `reasoning_effort=none`，实测推理 token 归零、快一个数量级）→ 提取器关推理后从"17 分钟且空正文"变为 8.7s 正常抽取（真实长记录段实测）；机械性角色调用（Planner/Auditor）同关推理，解题（Worker/修订）保持推理且空正文时关推理重试一次。schema 补一类边：`SUPERSEDES` 允许 Artifact→Artifact。TDD 85 测试全绿；角色图接口端到端验证通过（D1/A1/F1/A2 + `A2 -supersedes-> A1`、actor 标记正确、state_view 含作废提示）。
