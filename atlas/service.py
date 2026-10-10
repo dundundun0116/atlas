@@ -13,6 +13,7 @@
 保证评测跑不因单点异常中断；明细留服务日志供事后审计。
 """
 
+import os
 import re
 from typing import Callable, List, Optional, Sequence
 
@@ -53,6 +54,7 @@ class AtlasMemorySystem:
         budget_tokens: int = DEFAULT_BUDGET_TOKENS,
         shares: Optional[dict] = None,
         floors: Optional[dict] = None,
+        dump_path: Optional[str] = None,
     ):
         self.user_id = user_id
         self.engine = GraphMemoryEngine()
@@ -69,6 +71,8 @@ class AtlasMemorySystem:
         self.carry_log: List[str] = []      # 每次结转的一行审计（服务端打日志）
         self.extract_errors: List[str] = []
         self.assemble_errors: List[str] = []
+        self.dump_errors: List[str] = []
+        self.dump_path = dump_path          # 图状态快照路径（决策 #10；None 表示不落盘）
 
     # ---------- 官方三端点对应的行为 ----------
 
@@ -84,6 +88,7 @@ class AtlasMemorySystem:
             self.buffer = []
         self.pending_subtask = self._register_subtask(question).id
         context = self._safe_assemble()
+        self._dump()
         return f"<memory_context>\n{context}\n</memory_context>\nUser: {question}"
 
     # ---------- 内部 ----------
@@ -139,3 +144,13 @@ class AtlasMemorySystem:
             # 明细留在 assemble_errors 里供事后审计（服务端会打日志）。
             self.assemble_errors.append(f"{type(e).__name__}: {e}")
             return self.assembler.render_plan()
+
+    def _dump(self) -> None:
+        """图状态快照（决策 #10：HTML/SVG 导出的数据源）；快照失败绝不影响跑分。"""
+        if not self.dump_path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.dump_path), exist_ok=True)
+            self.engine.save_jsonl(self.dump_path)
+        except Exception as e:
+            self.dump_errors.append(f"{type(e).__name__}: {e}")

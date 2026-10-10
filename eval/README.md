@@ -42,3 +42,9 @@ eval/run_math.sh eval/configs/math_atlas.json         # Atlas 臂（同一子集
 - **代理注意**：本地服务地址一律用 `127.0.0.1`（config 已改），且 `run_math.sh`/`start_servers.sh` 会把 `0.0.0.0,127.0.0.1,localhost` 加入 `no_proxy`。原因是 shell 常带 `HTTP(S)_PROXY=127.0.0.1:7897`（Clash），而 `0.0.0.0` 不在系统 `NO_PROXY` 里，对本地服务的请求会被误发到代理——Clash 一挂，跑分全部报 ProxyError（2026-10-10 中断故障根因）。
 - **judge 口径（决策 #14）**：两臂 `judge_result_in_memory=true`（runner 每步都判分，该开关决定判分是否写进记忆条目）。2026-10-10 首次跑的那篇（`2312.05134_part_2`，judge=false 口径）已移到 `runs/stale_judge_false/` 存档，重跑前不删除会因断点续跑被跳过、导致口径混杂。
 - **Atlas 臂说明（决策 #11–#13）**：每子任务边界结转（wrap 到新子任务时先结转上一个：LLM 提取入图 + 叙事摘要）；提取器只在语义状态上做判断（规则负责子任务注册/完成/判分），输出严格 JSON，解析失败自动降级为规则摘要并把错误打进 `runs/memory_server.log`；组装失败（查账/溢出/环）降级为计划区，保证跑分不中断。
+- **提取器模型（实测选型）**：默认 `mimo-v2.6-flash`（同任务 33s、推理 ~400 token、JSON 合规）；`deepseek-v4.1-flash` 在长记录段上推理失控（8000 token 全被推理吃光、单次 17 分钟、常以连接错误告终），已弃用于提取器。可用 `ATLAS_EXTRACTOR_MODEL` 覆盖；`ATLAS_EXTRACTOR_MAX_TOKENS`（默认 8000）与 `ATLAS_BUDGET_TOKENS`（默认 8000）同理。
+- **图状态快照（决策 #10）**：Atlas 臂每次 wrap 把图落盘到 `runs/graphs/<user_id>.jsonl`（`ATLAS_GRAPH_DUMP_DIR` 可改，设空串关闭）；导出成可视化快照：
+  ```bash
+  .venv/bin/python -m atlas.cli export runs/graphs/<user_id>.jsonl --out snapshot.html   # 或 .svg
+  ```
+- **单篇冒烟**：`SMOKE_PAPER=<paper_name> eval/run_math.sh eval/configs/math_atlas.json`（结果隔离在 `runs/json/math_smoke/`，不污染正式跑分）。

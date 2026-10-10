@@ -108,3 +108,15 @@ class TestWrapLoop:
         out = system.wrap_user_prompt(Q1)
         assert "## 当前计划与约束" in out  # 降级仍给出计划区（状态可见）
         assert system.assemble_errors
+
+    def test_graph_dump_written_on_wrap(self, tmp_path):
+        from atlas.memory.engine import GraphMemoryEngine
+
+        dump = tmp_path / "graphs" / "u1.jsonl"
+        system = AtlasMemorySystem(
+            "u1", llm=FakeLLM(), token_counter=count_words, budget_tokens=4000,
+            dump_path=str(dump),
+        )
+        system.wrap_user_prompt(Q1)
+        loaded = GraphMemoryEngine.load_jsonl(dump)  # 快照可被引擎回读（导出工具的数据源）
+        assert "S1" in loaded.nodes

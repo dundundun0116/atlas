@@ -41,6 +41,9 @@ BUDGET_TOKENS = int(os.getenv("ATLAS_BUDGET_TOKENS", "8000"))
 EXTRACTOR_MODEL = os.getenv("ATLAS_EXTRACTOR_MODEL", "mimo-v2.6-flash")
 # 推理型模型推理 token 计入 max_tokens，太小会导致正文为空；8000 留足余量。
 EXTRACTOR_MAX_TOKENS = int(os.getenv("ATLAS_EXTRACTOR_MAX_TOKENS", "8000"))
+# 图状态快照目录（决策 #10）：每次 wrap 落盘 <user_id>.jsonl，供 CLI 导出 HTML/SVG 与事后核查；
+# 设为空串可关闭。
+GRAPH_DUMP_DIR = os.getenv("ATLAS_GRAPH_DUMP_DIR", os.path.join(ROOT, "runs", "graphs"))
 
 
 def count_tokens(text: str) -> int:
@@ -134,11 +137,15 @@ def initialize(req: InitializeRequest):
     if req.memory_system_name == "long_context":
         SYSTEMS[req.user_id] = LongContextMemorySystem(user_id=req.user_id)
     elif req.memory_system_name == "atlas":
+        dump_path = (
+            os.path.join(GRAPH_DUMP_DIR, f"{req.user_id}.jsonl") if GRAPH_DUMP_DIR else None
+        )
         SYSTEMS[req.user_id] = AtlasMemorySystem(
             req.user_id,
             llm=OpenAIChatLLM(),
             token_counter=count_tokens,
             budget_tokens=BUDGET_TOKENS,
+            dump_path=dump_path,
         )
     else:
         raise HTTPException(
@@ -164,7 +171,7 @@ def wrap(req: WrapRequest):
 
 def _flush_events(system) -> None:
     """把结转审计行与降级记录打到服务日志（跑分不中断，但过程必须可审计）。"""
-    for attr in ("carry_log", "extract_errors", "assemble_errors"):
+    for attr in ("carry_log", "extract_errors", "assemble_errors", "dump_errors"):
         events = getattr(system, attr, None)
         if not events:
             continue
