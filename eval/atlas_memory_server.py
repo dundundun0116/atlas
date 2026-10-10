@@ -35,9 +35,11 @@ LongContextMemorySystem = _arena_lc.LongContextMemorySystem
 
 _TOKENIZER = tiktoken.encoding_for_model("gpt-4o-mini")
 BUDGET_TOKENS = int(os.getenv("ATLAS_BUDGET_TOKENS", "8000"))
-EXTRACTOR_MODEL = os.getenv("ATLAS_EXTRACTOR_MODEL", "deepseek-v4.1-flash")
-# deepseek-v4.1-flash 是推理型模型：推理 token 计入 max_tokens，太小会导致正文为空
-# （实测 1500 被推理吃光 → finish=length、content 空；4000 起正常）。留足余量。
+# 提取器模型：实测 deepseek-v4.1-flash 在长记录段上推理失控（8000 token 全被推理吃光、
+# 单次调用 17 分钟且常以连接错误告终）；mimo-v2.6-flash 同任务 33s、推理 ~400 token、
+# JSON 合规且提取合理（2026-10-10 对比 deepseek-flash / mimo / v4.1-flash 三款）。
+EXTRACTOR_MODEL = os.getenv("ATLAS_EXTRACTOR_MODEL", "mimo-v2.6-flash")
+# 推理型模型推理 token 计入 max_tokens，太小会导致正文为空；8000 留足余量。
 EXTRACTOR_MAX_TOKENS = int(os.getenv("ATLAS_EXTRACTOR_MAX_TOKENS", "8000"))
 
 
@@ -46,24 +48,43 @@ def count_tokens(text: str) -> int:
 
 
 class OpenAIChatLLM:
-    """提取器 LLM（opencode go 通道；兼容层自动注入会话头）。"""
+    """提取器 LLM（opencode go 通道；兼容层自动注入会话头）。
+
+    连接类错误重试：经系统代理（Clash）的长连接池会偶发失效
+    （2026-10-10 冒烟实测 APIConnectionError），换新客户端重试，避免白白降级。
+    """
 
     def __init__(self):
+        self.client = self._new_client()
+        self.model = EXTRACTOR_MODEL
+
+    @staticmethod
+    def _new_client():
         from openai import OpenAI
 
-        self.client = OpenAI(
+        return OpenAI(
             api_key=os.getenv("OPENAI_API_KEY"),
             base_url=os.getenv("OPENAI_BASE_URL") or None,
         )
-        self.model = EXTRACTOR_MODEL
 
     def __call__(self, prompt: str) -> str:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            temperature=0.0,
-            max_tokens=EXTRACTOR_MAX_TOKENS,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        import openai
+
+        last_error = None
+        for _ in range(3):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    temperature=0.0,
+                    max_tokens=EXTRACTOR_MAX_TOKENS,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                break
+            except (openai.APIConnectionError, openai.APITimeoutError) as e:
+                last_error = e
+                self.client = self._new_client()  # 丢弃旧连接池再试
+        else:
+            raise last_error
         choice = response.choices[0]
         content = choice.message.content or ""
         if not content:
