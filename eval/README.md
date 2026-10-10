@@ -26,7 +26,9 @@ eval/run_math.sh eval/configs/math_atlas.json         # Atlas 臂（同一子集
 # 3) 评测结果
 #    runs/json/math/long_context_deepseek-v4.1-flash/<paper>/result.jsonl（基线逐 paper）
 #    runs/json/math/atlas/<paper>/result.jsonl（Atlas 臂逐 paper）
-#    python external/MemoryArena/env/env_systems/formal_reasoning_env/eval.py 汇总 all_results.json
+#    runs/json/math/atlas_orch/<paper>/result.jsonl（编排臂逐 paper）
+#    汇总成 Markdown 表（复用官方 eval.py 口径，并在臂目录写官方 all_results.json）：
+#    external/MemoryArena/.venv/bin/python eval/summarize.py runs/json/math --out runs/table.md
 ```
 
 ## 说明
