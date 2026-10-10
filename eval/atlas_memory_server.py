@@ -121,19 +121,19 @@ def add(req: AddRequest):
 def wrap(req: WrapRequest):
     system = _get(req.user_id)
     prompt = system.wrap_user_prompt(req.question)
-    _flush_errors(system)
+    _flush_events(system)
     return {"prompt": prompt}
 
 
-def _flush_errors(system) -> None:
-    """把降级记录打到服务日志（跑分不中断，但异常必须可审计）。"""
-    for attr in ("extract_errors", "assemble_errors"):
-        errors = getattr(system, attr, None)
-        if not errors:
+def _flush_events(system) -> None:
+    """把结转审计行与降级记录打到服务日志（跑分不中断，但过程必须可审计）。"""
+    for attr in ("carry_log", "extract_errors", "assemble_errors"):
+        events = getattr(system, attr, None)
+        if not events:
             continue
-        for message in errors:
+        for message in events:
             print(f"[atlas][{attr}] {message}", flush=True)
-        errors.clear()
+        events.clear()
 
 
 if __name__ == "__main__":

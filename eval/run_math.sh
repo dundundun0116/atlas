@@ -2,6 +2,8 @@
 # 跑 math 域（抽样子集，决策 #7；opencode go 兼容层 + 断点续跑）
 # 用法：eval/run_math.sh [config.json]
 #   默认 long_context 基线；Atlas 臂：eval/run_math.sh eval/configs/math_atlas.json
+#   单篇冒烟：SMOKE_PAPER=2308.12401 eval/run_math.sh eval/configs/math_atlas.json
+#     （结果落 runs/json/math_smoke/，与正式结果隔离）
 # 前置：eval/start_servers.sh 已启动两个服务；可用 SUBSET_N/SUBSET_SEED 覆盖抽样参数
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,4 +18,7 @@ export OPENCODE_COMPAT=1
 export OPENCODE_SESSION="atlas-eval-math"
 export PYTHONPATH="$ROOT/eval/opencode_compat${PYTHONPATH:+:$PYTHONPATH}"
 cd "$ROOT/external/MemoryArena"
+if [ -n "${SMOKE_PAPER:-}" ]; then
+  exec .venv/bin/python -u "$ROOT/eval/smoke_one_paper.py" "$CFG" "$SMOKE_PAPER"
+fi
 exec .venv/bin/python -u "$ROOT/eval/run_math_subset.py" "$CFG"

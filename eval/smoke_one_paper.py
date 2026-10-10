@@ -1,0 +1,66 @@
+"""单篇冒烟：用指定 config 跑一篇论文，验证接入层真实链路（少量、不产生正式对比数字）。
+
+- 默认论文 2308.12401（4 子任务，全库最小之一）——只验证链路与提取质量；
+- 结果写到 `runs/json/math_smoke/`（与正式结果目录隔离，不污染后续全量跑分；
+  正式跑分用 run_math.sh 的抽样子集，届时该篇会照常重跑）；
+- 提取器/组装的审计行打到 `runs/memory_server.log`（[atlas][carry_log] 等）。
+
+用法：SMOKE_PAPER=2308.12401 eval/run_math.sh [config.json]
+"""
+
+import glob
+import json
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "external", "MemoryArena"))
+
+import run_math  # noqa: E402
+from datasets import load_dataset  # noqa: E402
+
+_SNAPSHOT_GLOB = os.path.expanduser(
+    "~/.cache/huggingface/hub/datasets--ZexueHe--memoryarena/snapshots/*/{config}/data.jsonl"
+)
+_SMOKE_OUTPUT_DIR = os.path.join(ROOT, "runs", "json", "math_smoke")
+
+
+def _load_local(config: str):
+    files = sorted(glob.glob(_SNAPSHOT_GLOB.format(config=config)))
+    if not files:
+        raise SystemExit(f"[smoke] 本地缓存未命中：{_SNAPSHOT_GLOB.format(config=config)}")
+    print(f"[smoke] 本地缓存直载：{files[0]}", flush=True)
+    return load_dataset("json", data_files=files[0], split="train")
+
+
+def main() -> None:
+    cfg_path = sys.argv[1]
+    paper_name = sys.argv[2] if len(sys.argv) > 2 else "2308.12401"
+    cfg = json.load(open(cfg_path))
+    cfg["output"]["json_output_dir"] = _SMOKE_OUTPUT_DIR  # 与正式结果隔离
+
+    ds = _load_local(cfg["task_specific"]["dataset"]["hf_config"])
+    row = next((r for r in ds if r["paper_name"] == paper_name), None)
+    if row is None:
+        raise SystemExit(f"[smoke] 未找到论文 {paper_name}")
+
+    tasks = [
+        (row["questions"][i], row["answers"][i], row["backgrounds"][i])
+        for i in range(len(row["questions"]))
+    ]
+    print(
+        f"[smoke] {paper_name}: {len(tasks)} 子任务；"
+        f"memory={cfg['memory']['memory_system_name']}；config={cfg_path}",
+        flush=True,
+    )
+    logs = run_math.run_task_with_memory_and_env(cfg=cfg, tasks=tasks, paper_key=paper_name)
+    correct = sum(1 for log in logs if log.get("is_correct"))
+    print(f"[smoke] 完成：{correct}/{len(logs)} 正确", flush=True)
+    print(
+        f"[smoke] 结果：{os.path.join(_SMOKE_OUTPUT_DIR, cfg['memory']['memory_system_name'], paper_name)}",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

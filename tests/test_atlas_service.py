@@ -62,6 +62,8 @@ class TestWrapLoop:
         assert "[S2]" in out and "由此证明引理 3" in out  # 当前子任务在计划区
         # 提取器拿到的提示里带下一题（依赖判断的上下文）
         assert "由此证明引理 3" in system.extractor.llm.prompts[-1]
+        # 结转审计行（服务端日志的数据源）
+        assert system.carry_log and "applied=1" in system.carry_log[-1]
 
     def test_judge_correct_marks_note_without_failure_hint(self):
         system = make_system()

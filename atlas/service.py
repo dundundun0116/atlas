@@ -66,6 +66,7 @@ class AtlasMemorySystem:
         self.summaries: List[str] = []
         self.pending_subtask: Optional[str] = None
         self.carries = 0
+        self.carry_log: List[str] = []      # 每次结转的一行审计（服务端打日志）
         self.extract_errors: List[str] = []
         self.assemble_errors: List[str] = []
 
@@ -110,8 +111,15 @@ class AtlasMemorySystem:
 
         lines = self.carry.execute(self.buffer, extractor=_extract)
         result = captured.get("result")
-        if result is not None and result.error:
-            self.extract_errors.append(result.error)
+        if result is not None:
+            self.carry_log.append(
+                f"结转#{self.carries + 1}（{subtask_id}）：applied={len(result.ops_applied)} "
+                f"skipped={len(result.ops_skipped)} summary={result.summary[:80]}"
+            )
+            if result.error:
+                self.extract_errors.append(result.error)
+        else:
+            self.carry_log.append(f"结转#{self.carries + 1}（{subtask_id}）：提取器未返回结果")
         self.summaries.extend(lines)
         self.buffer = []
         self.carries += 1
