@@ -38,13 +38,14 @@ Planner → Worker → Auditor **固定三段式**：Planner 定路线（写 Dec
 - **对照臂**：`long_context`（官方基线：全历史截尾）／`atlas`（图状态记忆）／`atlas_orch`（+ 多智能体编排）；
 - **指标**：progress score（子任务正确率）、pass rate（末题正确）、SR@k、memory_length（上下文 token 数，即省 token 度量）。
 
-> 成绩表：跑分进行中。评测环境与三臂接入已就绪，小批量链路验证已通过（2 子任务：答案非空、提取器正常入图、无错误），全量数字待补。
+> 成绩表（**缩减口径初步数字**：2 篇小论文、9 子任务/臂，四臂同清单同模型；样本小，仅作方向性参考，不作结论）。`atlas_orch`（编排臂）缓跑中——其数字依赖 atlas 臂的设计稳定性，待三臂对比方向明确后再跑（2026-10-11）。
 
 | 臂 | progress score | pass rate | 平均上下文 tokens |
 |---|---|---|---|
-| long_context | 待跑 | 待跑 | 待跑 |
-| atlas | 待跑 | 待跑 | 待跑 |
-| atlas_orch | 待跑 | 待跑 | 待跑 |
+| long_context | 0.571 | 0.500 | 711 |
+| atlas | 0.643 | 0.500 | 1079 |
+| mage（叙事摘要基线） | 0.643 | 0.500 | 397 |
+| atlas_orch | 待跑（缓） | — | — |
 
 ## 快速开始
 
