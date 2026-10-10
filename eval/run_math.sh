@@ -8,6 +8,7 @@
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CFG="${1:-$ROOT/eval/configs/math_longcontext.json}"
+case "$CFG" in /*) ;; *) CFG="$ROOT/$CFG" ;; esac   # 相对路径按仓库根解析（脚本会 cd 到 external/）
 set -a; source "$ROOT/eval/.env"; set +a
 # 本地服务必须绕过代理：shell 若带 HTTP(S)_PROXY（Clash 127.0.0.1:7897）而 NO_PROXY
 # 不含 0.0.0.0，对本地服务的请求会被误发到代理，Clash 一挂跑分全报 ProxyError

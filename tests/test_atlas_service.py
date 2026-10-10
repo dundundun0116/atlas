@@ -84,6 +84,16 @@ class TestWrapLoop:
         assert s1.status == NodeStatus.DONE and s1.note == ""
         assert "曾答错" not in out
 
+    def test_pre_first_wrap_noise_is_dropped_without_carry(self):
+        """runner 在首个 wrap 前会 add "Initial result: Empty"：不应触发结转/LLM 调用。"""
+        system = make_system("不是 JSON")
+        system.add_chunk("Initial result: Empty\n")
+        out = system.wrap_user_prompt(Q1)
+        assert system.carries == 0 and system.carry_log == []
+        assert system.extract_errors == []
+        assert system.extractor.llm.prompts == []  # 没有烧提取调用
+        assert "<memory_context>" in out
+
     def test_bad_llm_reply_degrades_to_rule_summary(self):
         system = make_system("不是 JSON")
         system.wrap_user_prompt(Q1)

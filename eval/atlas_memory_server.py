@@ -36,6 +36,9 @@ LongContextMemorySystem = _arena_lc.LongContextMemorySystem
 _TOKENIZER = tiktoken.encoding_for_model("gpt-4o-mini")
 BUDGET_TOKENS = int(os.getenv("ATLAS_BUDGET_TOKENS", "8000"))
 EXTRACTOR_MODEL = os.getenv("ATLAS_EXTRACTOR_MODEL", "deepseek-v4.1-flash")
+# deepseek-v4.1-flash 是推理型模型：推理 token 计入 max_tokens，太小会导致正文为空
+# （实测 1500 被推理吃光 → finish=length、content 空；4000 起正常）。留足余量。
+EXTRACTOR_MAX_TOKENS = int(os.getenv("ATLAS_EXTRACTOR_MAX_TOKENS", "8000"))
 
 
 def count_tokens(text: str) -> int:
@@ -58,10 +61,23 @@ class OpenAIChatLLM:
         response = self.client.chat.completions.create(
             model=self.model,
             temperature=0.0,
-            max_tokens=1500,
+            max_tokens=EXTRACTOR_MAX_TOKENS,
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.choices[0].message.content or ""
+        choice = response.choices[0]
+        content = choice.message.content or ""
+        if not content:
+            # 空正文几乎总是"推理占满 max_tokens"：把诊断信息留在服务日志里
+            usage = response.usage
+            reasoning = None
+            if usage is not None and usage.completion_tokens_details is not None:
+                reasoning = usage.completion_tokens_details.reasoning_tokens
+            print(
+                f"[atlas][extractor] 空正文：finish={choice.finish_reason} reasoning={reasoning} "
+                f"completion={getattr(usage, 'completion_tokens', None)} 提示词={len(prompt)}字符",
+                flush=True,
+            )
+        return content
 
 
 class InitializeRequest(BaseModel):

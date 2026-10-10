@@ -140,6 +140,20 @@ class TestPrompt:
         assert "Judge: CORRECT" in prompt
         assert "下一题：证明引理 3" in prompt
 
+    def test_long_raw_segment_is_truncated_in_prompt(self):
+        """工具轨迹动辄上万字符：截断保护必须保留前部（Task/solution/Judge）并压住提示词规模。"""
+        eng = make_engine()
+        llm = FakeLLM(reply_with([]))
+        long_entry = (
+            "## Task: t\n## solution: 有效解答\n## Judge: CORRECT\n## Tool Calls Info: "
+            + "x" * 20000
+        )
+        LLMCarryOverExtractor(llm).extract([long_entry], eng)
+        prompt = llm.prompts[0]
+        assert "有效解答" in prompt and "Judge: CORRECT" in prompt
+        assert "已截断" in prompt
+        assert len(prompt) < 12000
+
     def test_callable_protocol_returns_result(self):
         eng = make_engine()
         extractor = LLMCarryOverExtractor(FakeLLM(reply_with([], summary="摘要")))

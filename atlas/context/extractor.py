@@ -44,6 +44,11 @@ _ADDER_METHOD = {
 
 _LLM_ACTOR = "extractor"
 
+# 记录段截断保护：`## Tool Calls Info` 里是整段工具轨迹（含完整推理文本），动辄上万字符，
+# 且对状态提取是噪声；Task/solution/Judge 都在前部，截断天然保留有效信息、控制提示词规模。
+_RAW_ENTRY_CAP = 3500
+_RAW_TOTAL_CAP = 7000
+
 _SYSTEM_PROMPT = """You maintain a structured execution-state graph for a long-horizon math reasoning task.
 
 Given the current graph state, the latest raw record segment, and (optionally) the upcoming question,
@@ -109,7 +114,10 @@ class LLMCarryOverExtractor:
             return ExtractionResult(error=f"LLM 调用失败：{type(e).__name__}: {e}")
         payload = _parse_json(raw)
         if payload is None:
-            return ExtractionResult(error="LLM 输出无法解析为 JSON", raw_output=raw)
+            excerpt = " ".join(raw.split())[:200]
+            return ExtractionResult(
+                error=f"LLM 输出无法解析为 JSON（前 200 字符：{excerpt!r}）", raw_output=raw
+            )
         ops = payload.get("operations") or []
         if not isinstance(ops, list):
             return ExtractionResult(error="operations 不是列表", raw_output=raw)
@@ -125,7 +133,7 @@ class LLMCarryOverExtractor:
         self, engine: GraphMemoryEngine, recent_raw: Sequence[str], next_question: Optional[str]
     ) -> str:
         parts = [_SYSTEM_PROMPT, "", "[GRAPH STATE]", _render_graph(engine),
-                 "", "[RAW RECORD SEGMENT]", "\n".join(recent_raw)]
+                 "", "[RAW RECORD SEGMENT]", _render_raw(recent_raw)]
         if next_question:
             parts += ["", "[UPCOMING QUESTION]", next_question]
         return "\n".join(parts)
@@ -219,6 +227,19 @@ class LLMCarryOverExtractor:
 
 
 # ---------- 工具 ----------
+
+
+def _render_raw(recent_raw: Sequence[str]) -> str:
+    parts = []
+    for entry in recent_raw:
+        text = entry.strip()
+        if len(text) > _RAW_ENTRY_CAP:
+            text = text[:_RAW_ENTRY_CAP].rstrip() + "\n…（本条过长，已截断）"
+        parts.append(text)
+    joined = "\n\n".join(parts)
+    if len(joined) > _RAW_TOTAL_CAP:
+        joined = joined[:_RAW_TOTAL_CAP].rstrip() + "\n…（记录段过长，已截断）"
+    return joined
 
 
 def _parse_json(text: str) -> Optional[dict]:

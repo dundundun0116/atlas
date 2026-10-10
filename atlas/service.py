@@ -76,8 +76,12 @@ class AtlasMemorySystem:
         self.buffer.append(chunk)
 
     def wrap_user_prompt(self, question: str) -> str:
-        if self.buffer:
+        if self.buffer and self.pending_subtask is not None:
             self._carry_over(question)
+        elif self.buffer:
+            # 首个 wrap 之前的记录（runner 会先 add "Initial result: Empty"）：
+            # 尚无子任务可结转，直接丢弃，不烧提取调用。
+            self.buffer = []
         self.pending_subtask = self._register_subtask(question).id
         context = self._safe_assemble()
         return f"<memory_context>\n{context}\n</memory_context>\nUser: {question}"
