@@ -89,6 +89,16 @@ class TestSupersede:
         with pytest.raises(ValueError):
             engine.supersede_with(d1.id, new_content="d3", reason="r3")
 
+    def test_supersede_artifact(self, engine):
+        """编排修订：修订稿作废草稿（决策 #15）。"""
+        a1 = engine.add_artifact("草稿答案")
+        a2 = engine.supersede_with(a1.id, new_content="修订答案", reason="auditor 打回：常数项错")
+        assert a1.status == NodeStatus.SUPERSEDED
+        assert a1.superseded_by == a2.id
+        assert a2.note == "auditor 打回：常数项错"
+        assert [a.content for a in engine.nodes.values()
+                if a.type == NodeType.ARTIFACT and a.status == NodeStatus.ACTIVE] == ["修订答案"]
+
     def test_supersede_requires_reason(self, engine):
         d1 = engine.add_decision("d1", reason="r")
         with pytest.raises(ValueError):

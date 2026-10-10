@@ -98,6 +98,9 @@
 | 12 | 提取器分工 | 规则+LLM 混合：规则负责子任务注册/完成标记/判分记录；LLM 只抽语义状态（Fact/Constraint/Decision/Artifact，含 supersede 作废更新），输出严格 JSON，解析失败降级为规则摘要 |
 | 13 | Atlas 上下文预算 | 8000 tokens（组装器总预算；实测本域自然需求 3–5k，基线全篇 10–25k） |
 | 14 | judge 口径 | 两臂 `judge_result_in_memory=true`（判分进记忆条目，公平可比）；旧口径（false）已跑那篇存档 `runs/stale_judge_false/`，待重跑 |
+| 15 | 编排形态（M3.5） | 固定三段式：Planner 定路线（Decision）→ Worker 解题（Artifact 草稿）→ Auditor 核验（Fact 疑虑）→ 仅当 Auditor 判"需修订"时 Worker 修订一次（修订稿作废草稿、记原因） |
+| 16 | 角色协调通道 | 协调全经共享图：角色结论/疑虑经 `/memory/role_note` 落成图节点（actor 标角色），下一角色经 `/memory/state_view` 读图状态视图而非对话历史 |
+| 17 | 编排开关 | config 一行（`agent.orchestration`）：入口脚本据此替换 runner 的 MathAgent（不改官方代码）；编排臂 `memory_system_name=atlas_orch` 使结果落独立目录 |
 
 已定不再重议：节点六类（Goal/Subtask/Constraint/Decision/Artifact/Fact）+ 行动者字段（选题定稿已含）。
 
@@ -108,9 +111,11 @@
 - 2026-10-03（定稿）：项目目标 = 实习准备（开源 GitHub 即可，非论文，创新性不作要求）；基座与语言不作为决策因素；选题定稿为"**面向 long-horizon 的记忆增强 + 上下文管理 + 多智能体编排**"；多智能体以内部编排形态跑现有 long-horizon 评测（MemoryArena 接口已核实可行）；agent 角色数量与组合待定；术语沿用约定——统一用"图状态记忆/状态层"，禁用"账本"比喻。
 - 2026-10-03（晚）：第 9 节清单逐项商定并回填（作废机制=时效字段+决策变迁；结转=子目标边界+阈值兜底；查账=规则式；组装=四区+动态预算；角色=Planner/Worker/Auditor；指标=三件套；协议=官方 runner+抽样；对照=复现 MAGE 简化版；harness=CLI+快照+Web UI）。底座定为 LangGraph：仅承担角色编排控制流，角色间数据流走共享图而非框架 state，不启用框架 checkpoint；实现中若此纪律不可守，按用户预设条件退回纯 Python 自写。
 - 2026-10-10：M2 接入层四项决策商定（#11 每子任务边界结转；#12 规则+LLM 混合提取器；#13 预算 8k；#14 两臂 judge 入记忆），同日落地实现（LLM 结转提取器 + AtlasMemorySystem + 分派式 memory server；TDD 59 测试）。
+- 2026-10-10（晚）：M3.5 三项决策商定（#15 固定三段式编排；#16 协调全经共享图；#17 config 一行编排开关）。附两条实现级记录：① `SUPERSEDES` 边扩展到 Artifact→Artifact（编排修订必须能作废错误草稿，否则草稿会作为活跃产出物留在图里，与"防矛盾共存"直接冲突）；② 推理开关——端点实测支持 `thinking.type=disabled`/`reasoning_effort=none`（推理 token 归零、快一个数量级），机械性调用（提取器、Planner/Auditor 的 JSON 输出）一律关推理，解题调用（Worker/修订）保持推理、空正文时关推理重试一次。
 
 ## 11. 进度日志（最新在上）
 
+- 2026-10-10（晚）：**M3.5 多智能体编排实现（决策 #15–#17）**——`atlas/orchestration.py`（固定三段式编排器：Planner 定路线写 Decision → Worker 解题写 Artifact 草稿 → Auditor 核验写 Fact 疑虑 → 需修订时 Worker 修订并作废草稿；LLM 与图客户端注入可测）+ `eval/atlas_agent.py`（OrchestratedMathAgent 挂官方 MathAgent，入口脚本按 config 一行替换；协调经 memory server 的 `/memory/state_view` 与 `/memory/role_note`；失败逐级降级：编排 → 单发 → 官方 act）+ 服务端角色图接口 + `eval/configs/math_atlas_orch.json`。**关键发现（顺带修复提取器）**：端点支持关推理（`thinking.type=disabled` / `reasoning_effort=none`，实测推理 token 归零、快一个数量级）→ 提取器关推理后从"17 分钟且空正文"变为 8.7s 正常抽取（真实长记录段实测）；机械性角色调用（Planner/Auditor）同关推理，解题（Worker/修订）保持推理且空正文时关推理重试一次。schema 补一类边：`SUPERSEDES` 允许 Artifact→Artifact。TDD 85 测试全绿；角色图接口端到端验证通过（D1/A1/F1/A2 + `A2 -supersedes-> A1`、actor 标记正确、state_view 含作废提示）。
 - 2026-10-10（下午·二）：**冒烟确认 + 提取器修复 + 图快照/CLI 起步（决策 #10）**——冒烟抓到三个真问题并修复：① runner 在首个 wrap 前会先 add "Initial result: Empty"，被当成待结转记录（白烧调用）→ 无子任务时直接丢弃；② 提取器空正文（推理 token 吃光 max_tokens）→ 提到 8000 + 空正文诊断日志；③ 记录段里的 `## Tool Calls Info` 是整段工具轨迹（上万字符）→ 按条 3500/全段 7000 字符截断保护。**提取器实测选型**：deepseek-v4.1-flash 在长记录段上推理失控（8000 token 全被推理吃光、单次 17 分钟、常以连接错误告终）、deepseek-flash 63s/推理 7111 token、mimo-v2.6-flash 33s/推理 398 token 且 JSON 合规 → 提取器默认改 mimo-v2.6-flash（ATLAS_EXTRACTOR_MODEL 可覆盖；agent/env 侧仍用 deepseek-v4.1-flash）。迷你会话 + 真实跑分冒烟确认：服务端结转通（`结转#1（S1）：applied=2 skipped=0`，无错误）。新增 `atlas/export.py`（自包含 SVG/HTML 渲染：类型分列、状态配色、边型线型；零依赖确定性输出）+ `atlas/cli.py`（`python -m atlas.cli export`）+ 图快照落盘（服务端 `ATLAS_GRAPH_DUMP_DIR` 默认 runs/graphs/）；8002 临时服务端到端验证（dump → 导出 → SVG 合法 XML）。TDD 72 测试全绿。
 - 2026-10-10（下午）：**M2 接入层实现（决策 #11–#14 落地）**——新增 `atlas/context/extractor.py`（LLM 结转提取器：严格 JSON、逐操作校验跳过、DEPENDS_ON 防环、supersede 作废、解析失败降级）、`atlas/service.py`（AtlasMemorySystem：每子任务边界结转、规则注册子任务/判分记录、H 区答错提示、组装失败降级为计划区）、`eval/atlas_memory_server.py`（单端口按 memory_system_name 分派 long_context/atlas，A/B 只差 config 一行；`lite_memory_server.py` 并入后删除）、`eval/configs/math_atlas.json`；双臂 judge 口径统一为 true（决策 #14），旧口径已跑那篇移至 `runs/stale_judge_false/` 存档待重跑；`run_math.sh` 支持传入 config。TDD 新增 17 测试（59 全绿）。跑分仍暂停（按用户指示，等续跑指令）。
 

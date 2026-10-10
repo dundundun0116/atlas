@@ -38,6 +38,9 @@ def main() -> None:
     paper_name = sys.argv[2] if len(sys.argv) > 2 else "2308.12401"
     cfg = json.load(open(cfg_path))
     cfg["output"]["json_output_dir"] = _SMOKE_OUTPUT_DIR  # 与正式结果隔离
+    from atlas_agent import maybe_enable_orchestration  # eval/ 在 sys.path（脚本目录）
+
+    maybe_enable_orchestration(cfg, run_math)  # 决策 #17：config 一行开关
 
     ds = _load_local(cfg["task_specific"]["dataset"]["hf_config"])
     row = next((r for r in ds if r["paper_name"] == paper_name), None)

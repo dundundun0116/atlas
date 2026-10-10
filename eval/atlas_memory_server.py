@@ -41,6 +41,9 @@ BUDGET_TOKENS = int(os.getenv("ATLAS_BUDGET_TOKENS", "8000"))
 EXTRACTOR_MODEL = os.getenv("ATLAS_EXTRACTOR_MODEL", "mimo-v2.6-flash")
 # 推理型模型推理 token 计入 max_tokens，太小会导致正文为空；8000 留足余量。
 EXTRACTOR_MAX_TOKENS = int(os.getenv("ATLAS_EXTRACTOR_MAX_TOKENS", "8000"))
+# 提取是机械性抽取任务，不需要长推理：opencode go 端点支持 thinking.type=disabled
+# （实测推理 token 归零、单次从 17 分钟降到秒级）。设 ATLAS_EXTRACTOR_THINKING=on 可恢复。
+EXTRACTOR_NO_THINK = os.getenv("ATLAS_EXTRACTOR_THINKING", "off").strip().lower() != "on"
 # 图状态快照目录（决策 #10）：每次 wrap 落盘 <user_id>.jsonl，供 CLI 导出 HTML/SVG 与事后核查；
 # 设为空串可关闭。
 GRAPH_DUMP_DIR = os.getenv("ATLAS_GRAPH_DUMP_DIR", os.path.join(ROOT, "runs", "graphs"))
@@ -73,6 +76,7 @@ class OpenAIChatLLM:
     def __call__(self, prompt: str) -> str:
         import openai
 
+        extra = {"extra_body": {"thinking": {"type": "disabled"}}} if EXTRACTOR_NO_THINK else {}
         last_error = None
         for _ in range(3):
             try:
@@ -81,6 +85,7 @@ class OpenAIChatLLM:
                     temperature=0.0,
                     max_tokens=EXTRACTOR_MAX_TOKENS,
                     messages=[{"role": "user", "content": prompt}],
+                    **extra,
                 )
                 break
             except (openai.APIConnectionError, openai.APITimeoutError) as e:
@@ -121,6 +126,18 @@ class WrapRequest(BaseModel):
     memory_system_name: str
 
 
+class StateViewRequest(BaseModel):
+    role: str = "worker"
+
+
+class RoleNoteRequest(BaseModel):
+    role: str
+    kind: str
+    content: str
+    reason: str = ""
+    evidence: str = ""
+
+
 app = FastAPI(title="Atlas Memory Server (long_context + atlas)")
 SYSTEMS: Dict[str, object] = {}
 
@@ -136,7 +153,9 @@ def _get(user_id: str):
 def initialize(req: InitializeRequest):
     if req.memory_system_name == "long_context":
         SYSTEMS[req.user_id] = LongContextMemorySystem(user_id=req.user_id)
-    elif req.memory_system_name == "atlas":
+    elif req.memory_system_name in ("atlas", "atlas_orch"):
+        # atlas_orch：同一 AtlasMemorySystem，仅用于让编排臂的结果落到独立目录
+        # （runner 用 memory_system_name 命名输出目录）；编排开关在 config 的 agent.orchestration
         dump_path = (
             os.path.join(GRAPH_DUMP_DIR, f"{req.user_id}.jsonl") if GRAPH_DUMP_DIR else None
         )
@@ -178,6 +197,30 @@ def _flush_events(system) -> None:
         for message in events:
             print(f"[atlas][{attr}] {message}", flush=True)
         events.clear()
+
+
+def _current_atlas() -> AtlasMemorySystem:
+    """当前 atlas 会话：runner 单进程顺序执行，取最近初始化的 atlas 系统即可。"""
+    for user_id in reversed(list(SYSTEMS)):
+        system = SYSTEMS[user_id]
+        if isinstance(system, AtlasMemorySystem):
+            return system
+    raise HTTPException(status_code=404, detail="no atlas session initialized")
+
+
+@app.post("/memory/state_view")
+def state_view(req: StateViewRequest):
+    """编排角色读共享图（决策 #16）：返回计划区 + 踩坑提示。"""
+    return {"view": _current_atlas().state_view(req.role)}
+
+
+@app.post("/memory/role_note")
+def role_note(req: RoleNoteRequest):
+    """编排角色写共享图（决策 #16）：结论/疑虑落成节点，actor 标记角色。"""
+    try:
+        return _current_atlas().role_note(req.role, req.kind, req.content, req.reason, req.evidence)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 if __name__ == "__main__":

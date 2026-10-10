@@ -73,6 +73,7 @@ class AtlasMemorySystem:
         self.assemble_errors: List[str] = []
         self.dump_errors: List[str] = []
         self.dump_path = dump_path          # 图状态快照路径（决策 #10；None 表示不落盘）
+        self._last_draft_artifact: Optional[str] = None  # 供 auditor 打回后的修订作废（决策 #15）
 
     # ---------- 官方三端点对应的行为 ----------
 
@@ -133,6 +134,51 @@ class AtlasMemorySystem:
         self.buffer = []
         self.carries += 1
         self.pending_subtask = None
+
+    # ---------- 多智能体编排的图接口（决策 #15–#17：协调全经共享图） ----------
+
+    def state_view(self, role: str) -> str:
+        """给角色的图状态视图（计划区 + 踩坑提示）：角色据此协调，而非读对话历史。"""
+        view = self.assembler.render_plan()
+        hints = self.engine.hints()
+        if hints:
+            view += "\n\n## 踩坑与提示\n" + "\n".join(hints)
+        return view
+
+    def role_note(self, role: str, kind: str, content: str, reason: str = "",
+                  evidence: str = "") -> dict:
+        """把角色的结论/疑虑写入图（actor=role）。
+
+        kind：decision（Planner 路线，必须带 reason）/ fact（Auditor 疑虑）/
+        artifact（Worker 草稿）/ artifact_revise（修订：作废上一草稿并记原因）。
+        """
+        content = str(content or "").strip()
+        if not content:
+            raise ValueError("role_note content 不能为空")
+        if kind == "decision":
+            if not str(reason or "").strip():
+                raise ValueError("role_note decision 必须带 reason")
+            node = self.engine.add_decision(content, reason=reason, evidence=evidence, actor=role)
+        elif kind == "fact":
+            node = self.engine.add_fact(content, note=str(reason or ""), actor=role)
+        elif kind == "artifact":
+            node = self.engine.add_artifact(content, actor=role)
+            self._last_draft_artifact = node.id
+        elif kind == "artifact_revise":
+            previous = self._last_draft_artifact
+            if previous and previous in self.engine.nodes and \
+                    self.engine.nodes[previous].status == NodeStatus.ACTIVE:
+                node = self.engine.supersede_with(
+                    previous, new_content=content,
+                    reason=reason or "auditor 打回后修订", actor=role,
+                )
+            else:
+                node = self.engine.add_artifact(content, actor=role)
+            self._last_draft_artifact = node.id
+        else:
+            raise ValueError(f"不支持的 role_note kind: {kind}")
+        self._dump()
+        return {"node_id": node.id, "kind": kind, "actor": role}
 
     def _safe_assemble(self) -> str:
         try:

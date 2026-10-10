@@ -112,7 +112,7 @@ class LLMCarryOverExtractor:
             raw = self.llm(prompt) or ""
         except Exception as e:  # LLM 通道故障 → 降级，不打断跑分
             return ExtractionResult(error=f"LLM 调用失败：{type(e).__name__}: {e}")
-        payload = _parse_json(raw)
+        payload = parse_json_object(raw)
         if payload is None:
             excerpt = " ".join(raw.split())[:200]
             return ExtractionResult(
@@ -242,7 +242,7 @@ def _render_raw(recent_raw: Sequence[str]) -> str:
     return joined
 
 
-def _parse_json(text: str) -> Optional[dict]:
+def parse_json_object(text: str) -> Optional[dict]:
     if not text:
         return None
     s = text.strip()
@@ -296,6 +296,7 @@ def _render_graph(engine: GraphMemoryEngine) -> str:
             extra.append(f"reason: {node.reason}")
         suffix = f" ({'; '.join(extra)})" if extra else ""
         lines.append(
-            f"- [{node.id}] ({node.type.value}, {node.status.value}) {node.content}{suffix}"
+            f"- [{node.id}] ({node.type.value}, {node.status.value}, {node.actor}) "
+            f"{node.content}{suffix}"
         )
     return "\n".join(lines)

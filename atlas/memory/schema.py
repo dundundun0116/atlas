@@ -59,6 +59,9 @@ LEGAL_EDGES: set[tuple[EdgeType, NodeType, NodeType]] = {
     (EdgeType.SUPERSEDES, NodeType.CONSTRAINT, NodeType.CONSTRAINT),
     (EdgeType.SUPERSEDES, NodeType.FACT, NodeType.FACT),
     (EdgeType.SUPERSEDES, NodeType.SUBTASK, NodeType.SUBTASK),
+    # 编排修订（决策 #15）：auditor 打回后 worker 的修订稿作废草稿——否则错误草稿
+    # 会作为活跃产出物留在图里（矛盾共存），与项目要防的失败模式直接冲突。
+    (EdgeType.SUPERSEDES, NodeType.ARTIFACT, NodeType.ARTIFACT),
 }
 
 

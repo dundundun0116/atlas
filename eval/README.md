@@ -48,3 +48,4 @@ eval/run_math.sh eval/configs/math_atlas.json         # Atlas 臂（同一子集
   .venv/bin/python -m atlas.cli export runs/graphs/<user_id>.jsonl --out snapshot.html   # 或 .svg
   ```
 - **单篇冒烟**：`SMOKE_PAPER=<paper_name> eval/run_math.sh eval/configs/math_atlas.json`（结果隔离在 `runs/json/math_smoke/`，不污染正式跑分）。
+- **编排臂（M3.5，决策 #15–#17）**：`eval/run_math.sh eval/configs/math_atlas_orch.json`——同一 memory server（`memory_system_name=atlas_orch` 仅让结果落独立目录），`agent.orchestration=true` 使入口脚本把 runner 的 MathAgent 替换为编排 agent（Planner → Worker → Auditor → 必要时 Worker 修订）；角色经 `/memory/state_view`（读图）与 `/memory/role_note`（写图）协调，结论/疑虑落成节点（actor 标角色），修订作废草稿。推理开关：机械性 JSON 调用（提取器、Planner/Auditor）默认关推理（`ATLAS_EXTRACTOR_THINKING=on` 可恢复）；解题（Worker/修订）保持推理，预算 `ATLAS_WORKER_MAX_TOKENS`（默认 24000），空正文时自动关推理重试一次。

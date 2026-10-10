@@ -63,4 +63,7 @@ if __name__ == "__main__":
         else os.path.join(ROOT, "eval", "configs", "math_longcontext.json")
     )
     cfg = json.load(open(cfg_path))
+    from atlas_agent import maybe_enable_orchestration  # eval/ 在 sys.path（脚本目录）
+
+    maybe_enable_orchestration(cfg, run_math)  # 决策 #17：config 一行开关
     run_math.main(cfg)
