@@ -36,6 +36,7 @@ eval/run_math.sh eval/configs/math_atlas.json         # Atlas 臂（同一子集
 - venv 在 `external/MemoryArena/.venv`（uv 创建，Python 3.12），只装了 math 域必需依赖；其他域再按需补。
 - `runs/` 不入库（.gitignore）。
 - 抽样协议：决策 #7（每域固定 n、固定种子）；当前 math 域 n=10、seed=20261010，清单 `runs/subset_formal_reasoning_math_n10_seed20261010.txt`。多次重复（多 seed）留到 M3 的 Atlas-vs-基线对比阶段。
+- 指定论文子集：`SUBSET_INDICES="39,36,22" eval/run_math.sh ...`（逗号分隔全库索引，跳过随机抽样、按给定顺序跑；清单写 `runs/subset_<config>_idx<...>.txt`）——小论文初步数字（三臂同清单保证可比）用。
 - 断点续跑：runner 按 paper 粒度跳过已有完整 result.jsonl 的任务，中断后重跑即续。
 - 数据加载：`run_math_subset.py` **本地缓存直载优先**（`~/.cache/huggingface/hub/datasets--ZexueHe--memoryarena/`），HF hub 仅作后备——直连偶发失败时 datasets 会走有 bug 的缓存回退路径（ValueError），本地直载完全绕开。
 - 历史：NVIDIA NIM 免费档实测延迟 ~98s/请求且 HTTP/2 不稳，已弃用；opencode go 实测 ~2s/请求（简单调用）。

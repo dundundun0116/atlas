@@ -51,6 +51,7 @@ Planner → Worker → Auditor **固定三段式**：Planner 定路线（写 Dec
 ```bash
 # 离线演示（不需要任何 API 凭据）：脚本化提取器跑一段迷你会话，打印四区组装并导出图快照
 .venv/bin/python -m atlas.demo                 # 产物：runs/demo/graph.html 与 graph.svg
+.venv/bin/streamlit run atlas/demo_app.py      # 同一场景的可视化演示页（结转过程 + 图快照交互）
 
 # 评测环境（venv 与凭据说明见 eval/README.md）
 eval/start_servers.sh          # env server :8001 + memory server :8000（按 memory_system_name 分派）

@@ -22,6 +22,9 @@ from datasets import load_dataset as _original_load_dataset  # noqa: E402
 
 N = int(os.environ.get("SUBSET_N", "10"))
 SEED = int(os.environ.get("SUBSET_SEED", "20261010"))
+# 指定全库索引（逗号分隔，如 SUBSET_INDICES="39,22,36"）时跳过随机抽样，按给定顺序跑——
+# 用于小论文初步数字（B 路线）：先跑短的，尽早拿到一篇完整对照
+SUBSET_INDICES = os.environ.get("SUBSET_INDICES", "").strip()
 
 # 本地缓存快照优先：HF 直连偶发失败时 datasets 会走有 bug 的"缓存回退"路径
 # （把 split 拼进 config 名导致 ValueError），本地直载完全绕开 hub。
@@ -41,13 +44,21 @@ def _load_dataset_resilient(path, config, split):
 
 def _subset_loader(path, config, split):
     ds = _load_dataset_resilient(path, config, split)
-    n = min(N, len(ds))
-    idx = sorted(random.Random(SEED).sample(range(len(ds)), n))
+    if SUBSET_INDICES:
+        idx = [int(x) for x in SUBSET_INDICES.split(",") if x.strip()]
+        bad = [i for i in idx if not 0 <= i < len(ds)]
+        if bad:
+            raise SystemExit(f"[subset] 索引越界 {bad}（全库 {len(ds)} 篇）")
+        tag = "idx" + "-".join(str(i) for i in idx)
+    else:
+        n = min(N, len(ds))
+        idx = sorted(random.Random(SEED).sample(range(len(ds)), n))
+        tag = f"n{n}_seed{SEED}"
     names = [ds[i]["paper_name"] for i in idx]
-    print(f"[subset] {config}: 全量 {len(ds)} -> 抽样 {n}（seed={SEED}）")
+    print(f"[subset] {config}: 全量 {len(ds)} -> 按索引 {idx if SUBSET_INDICES else f'抽样 n={N} seed={SEED}'}")
     for i, name in zip(idx, names):
         print(f"[subset]   #{i:2d}: {name} ({len(ds[i]['questions'])} 子任务)")
-    manifest = os.path.join(ROOT, "runs", f"subset_{config}_n{n}_seed{SEED}.txt")
+    manifest = os.path.join(ROOT, "runs", f"subset_{config}_{tag}.txt")
     os.makedirs(os.path.dirname(manifest), exist_ok=True)
     with open(manifest, "w", encoding="utf-8") as f:
         f.write("\n".join(f"{i}\t{name}" for i, name in zip(idx, names)) + "\n")
