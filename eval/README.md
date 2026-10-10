@@ -18,8 +18,9 @@
 eval/start_servers.sh
 # 确认：curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8001/docs   # 200
 
-# 2) 跑 math 域 long_context 对照（40 篇 paper，顺序执行、断点续跑）
+# 2) 跑 math 域 long_context 对照（抽样子集：默认 n=10、seed=20261010，共 95 子任务）
 eval/run_math.sh
+#    可用 SUBSET_N / SUBSET_SEED 覆盖；子集清单写入 runs/subset_*.txt，Atlas 对照跑用同一清单保证可比
 
 # 3) 评测结果
 #    runs/json/math/long_context_deepseek-v4.1-flash/<paper>/result.jsonl（逐 paper）
@@ -30,6 +31,9 @@ eval/run_math.sh
 
 - venv 在 `external/MemoryArena/.venv`（uv 创建，Python 3.12），只装了 math 域必需依赖；其他域再按需补。
 - `runs/` 不入库（.gitignore）。
+- 抽样协议：决策 #7（每域固定 n、固定种子）；当前 math 域 n=10、seed=20261010，清单 `runs/subset_formal_reasoning_math_n10_seed20261010.txt`。多次重复（多 seed）留到 M3 的 Atlas-vs-基线对比阶段。
 - 断点续跑：runner 按 paper 粒度跳过已有完整 result.jsonl 的任务，中断后重跑即续。
+- 数据加载：`run_math_subset.py` **本地缓存直载优先**（`~/.cache/huggingface/hub/datasets--ZexueHe--memoryarena/`），HF hub 仅作后备——直连偶发失败时 datasets 会走有 bug 的缓存回退路径（ValueError），本地直载完全绕开。
 - 历史：NVIDIA NIM 免费档实测延迟 ~98s/请求且 HTTP/2 不稳，已弃用；opencode go 实测 ~2s/请求（简单调用）。
 - opencode go 注意事项：直连即可（无需代理）；请求必须带 `x-opencode-session` 头（缺失会 400 `MissingSessionID`），兼容层已处理。
+- 后台运行请用 `python -u`（脚本已带），否则输出被块缓冲看不到进度。
