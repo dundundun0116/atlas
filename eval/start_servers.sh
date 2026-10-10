@@ -4,6 +4,9 @@
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 set -a; source "$ROOT/eval/.env"; set +a
+export OPENCODE_COMPAT=1
+export OPENCODE_SESSION="atlas-eval-math"
+export PYTHONPATH="$ROOT/eval/opencode_compat${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p "$ROOT/runs"
 cd "$ROOT/external/MemoryArena"
 
