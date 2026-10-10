@@ -50,7 +50,7 @@ def main():
         out_dir = Path(args.kg_dir) / f"{bench}__{args.variant}"
         out_dir.mkdir(parents=True, exist_ok=True)
         chunks = [json.loads(l) for l in
-                  (Path(args.corpus_dir) / f"{bench}__full_dev" / "chunks.jsonl").read_text(encoding="utf-8").splitlines()
+                  (Path(args.corpus_dir) / f"{bench}__{args.variant}" / "chunks.jsonl").read_text(encoding="utf-8").splitlines()
                   if l.strip()]
         if args.limit:
             chunks = chunks[:args.limit]
@@ -110,16 +110,21 @@ def _extract(chunks, out_dir: Path, args) -> None:
 
 def _finalize(chunks, out_dir: Path, args) -> None:
     ext_path = out_dir / "extractions.jsonl"
-    done = _load_done(ext_path)
+    valid_ids = {c["chunk_id"] for c in chunks}
+    rows = [json.loads(l) for l in ext_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    outside = [r for r in rows if r["chunk_id"] not in valid_ids]
+    if outside:
+        # 抽取文件超出语料（如变体错位）：只建语料内的块，防止图与评测语料不一致
+        print(f"[finalize] 警告：抽取文件含 {len(outside)} 条语料外记录，已过滤"
+              f"（{len(rows) - len(outside)} 条入库）")
+        rows = [r for r in rows if r["chunk_id"] in valid_ids]
+    done = {r["chunk_id"] for r in rows}
     missing = len(chunks) - len(done)
     if missing > 0:
         print(f"[finalize] 警告：还有 {missing} 块未抽取（将按现有 {len(done)} 块建图；"
               f"补齐后可重新 finalize 覆盖）")
     graph = EntityGraph()
-    for line in ext_path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
+    for row in rows:
         graph.add_extraction(Extraction(chunk_id=row["chunk_id"],
                                         entities=row["entities"], triples=row["triples"]))
     print(f"[finalize] {len(graph.nodes)} 节点 / {len(graph._edges)} 三元组边 / {len(graph.passages)} 块")

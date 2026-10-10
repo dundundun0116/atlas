@@ -60,8 +60,14 @@ def _load_query_entities(kg_dir: Path) -> dict[str, list[str]]:
     path = Path(kg_dir) / "query_entities.jsonl"
     if not path.exists():
         return {}
-    return {r["question"]: r.get("entities", [])
-            for r in map(json.loads, path.read_text(encoding="utf-8").splitlines()) if r.strip()}
+    out = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        r = json.loads(line)
+        out[r["question"]] = r.get("entities", [])
+    return out
 
 
 def _build_searcher(family, bench, chunks, chunk_ids, args, embedder):
