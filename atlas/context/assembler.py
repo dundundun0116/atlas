@@ -115,6 +115,10 @@ class ContextAssembler:
 
     # ---------- 区渲染 ----------
 
+    def render_plan(self) -> str:
+        """计划区单独渲染（组装失败降级时也要保证状态可见）。"""
+        return self._render_plan()
+
     def _render_plan(self) -> str:
         eng = self.engine
         lines = [ZONE_PLAN]

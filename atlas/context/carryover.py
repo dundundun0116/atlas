@@ -59,15 +59,20 @@ class CarryOverManager:
     ) -> List[str]:
         if not recent_raw:
             return []
-        # 1) 状态先入图
+        # 1) 状态先入图（提取器可返回 ExtractionResult：其 summary 作为叙事摘要）
+        result = None
         if extractor is not None:
-            extractor(recent_raw, self.engine)
-        # 2) 带全局步号的叙事摘要
+            result = extractor(recent_raw, self.engine)
+        # 2) 带全局步号的叙事摘要（LLM 摘要优先，缺失时退化为逐行占位）
         self.step += len(recent_raw)
         start = self.step - len(recent_raw)
-        summary = [
-            f"[步骤 {start + i + 1}] {line}" for i, line in enumerate(recent_raw)
-        ]
+        llm_summary = getattr(result, "summary", "") if result is not None else ""
+        if llm_summary:
+            summary = [f"[步骤 {start + 1}–{self.step}] {llm_summary}"]
+        else:
+            summary = [
+                f"[步骤 {start + i + 1}] {line}" for i, line in enumerate(recent_raw)
+            ]
         # 3) 边界标注（只报一次）
         newly_done = [
             n for n in self.engine.nodes.values()

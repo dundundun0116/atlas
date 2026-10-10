@@ -12,7 +12,7 @@
 
   "memory": {
     "session_wise_memory": true,
-    "judge_result_in_memory": false,
+    "judge_result_in_memory": true,
     "memory_system_name": "long_context",
     "base_url": "http://127.0.0.1:8000",
     "timeout": 300

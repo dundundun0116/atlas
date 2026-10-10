@@ -194,7 +194,7 @@ class GraphMemoryEngine:
         return list(reversed(chain))
 
     def hints(self) -> List[str]:
-        """踩坑提示（H 区数据源）：被推翻的节点+推翻原因、已过期节点+原因。"""
+        """踩坑提示（H 区数据源）：被推翻/过期节点 + 推翻原因、答错的子任务。"""
         lines: List[str] = []
         for e in self.edges:
             if e.type != EdgeType.SUPERSEDES:
@@ -205,6 +205,10 @@ class GraphMemoryEngine:
         for n in self.nodes.values():
             if n.status == NodeStatus.EXPIRED:
                 lines.append(f"[{n.id}] {n.content} ——已过期，原因：{n.note}")
+            if n.meta.get("failed"):
+                lines.append(
+                    f"[{n.id}] {n.content} ——曾答错（{n.note or 'judge 判定错误'}），避免沿用其结论"
+                )
         return lines
 
     # ---------- 持久化 ----------

@@ -158,6 +158,15 @@ class TestQueries:
         assert "住西湖区" in text and "展会房价翻倍" in text  # 被推翻的决定 + 原因
         assert "用户改期" in text
 
+    def test_hints_include_failed_subtasks(self, engine):
+        engine.add_goal("g")
+        s1 = engine.add_subtask("给出上界")
+        engine.complete_subtask(s1.id)
+        engine.nodes[s1.id].meta["failed"] = True  # 由服务层按 Judge 结果标记
+        engine.nodes[s1.id].note = "Judge: INCORRECT"
+        text = "\n".join(engine.hints())
+        assert "曾答错" in text and "给出上界" in text
+
 
 class TestPersistence:
     def test_jsonl_roundtrip(self, engine, tmp_path):

@@ -15,5 +15,5 @@ cd "$ROOT/external/MemoryArena"
 
 nohup .venv/bin/python env/env_server.py > "$ROOT/runs/env_server.log" 2>&1 &
 echo "env_server  pid=$!  log=runs/env_server.log"
-nohup .venv/bin/python "$ROOT/eval/lite_memory_server.py" > "$ROOT/runs/memory_server.log" 2>&1 &
-echo "memory_server pid=$!  log=runs/memory_server.log"
+nohup .venv/bin/python "$ROOT/eval/atlas_memory_server.py" > "$ROOT/runs/memory_server.log" 2>&1 &
+echo "memory_server pid=$!  log=runs/memory_server.log  （按 memory_system_name 分派：long_context / atlas）"

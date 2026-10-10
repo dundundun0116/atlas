@@ -93,3 +93,14 @@ class TestManager:
     def test_empty_raw_returns_empty_summary(self, engine):
         manager = CarryOverManager(engine, token_counter=count_words)
         assert manager.execute([]) == []
+
+    def test_llm_summary_used_when_extractor_returns_one(self, engine):
+        from atlas.context.extractor import ExtractionResult
+
+        class SummaryExtractor:
+            def __call__(self, recent_raw, engine):
+                return ExtractionResult(summary="本段完成：确定了日期与机票。")
+
+        manager = CarryOverManager(engine, token_counter=count_words)
+        lines = manager.execute(["记录一", "记录二"], extractor=SummaryExtractor())
+        assert lines == ["[步骤 1–2] 本段完成：确定了日期与机票。"]

@@ -1,6 +1,6 @@
 # Atlas 项目概述
 
-> 状态：v0.3（2026-10-03）——选题与十项决策已商定（第 9 节）；M0 完成，M1 抽样跑分中断暂停（1/10 篇，代理故障已修，待续跑），M2 离线核心已实现（42 测试）。进度明细见第 11 节。
+> 状态：v0.3（2026-10-03）——选题与十项决策已商定（第 9 节，另 #11–#14 于 2026-10-10 商定）；M0 完成，M1 抽样跑分中断暂停（1/10 篇为旧 judge 口径、已存档待重跑），M2 接入层已实现（59 测试）。进度明细见第 11 节。
 
 ## 1. 一句话定位
 
@@ -75,12 +75,12 @@
 |---|---|---|---|
 | M0 | 精读：pi 源码 + MemoryArena 客户端 + MAGE 全文 | 挂接点清单、schema 裁剪输入 | ✅ 完成（2026-10-03，MAGE 笔记见 notes/） |
 | M1 | 评测环境跑通 + 对照组数字对齐 | 环境 ready | 🟡 抽样跑分中断暂停（1/10 篇完成；代理故障已修，断点续跑就绪，待用户指示） |
-| M2 | 图状态记忆引擎 MVP + 结转式上下文管理 | 在 formal_reasoning 域胜过 long_context 对照 | 🟡 离线核心已实现（引擎/组装器/结转，TDD 42 测试全绿）；待 LLM 结转提取器 + MemoryArena 接入 |
+| M2 | 图状态记忆引擎 MVP + 结转式上下文管理 | 在 formal_reasoning 域胜过 long_context 对照 | 🟡 接入层已实现（LLM 结转提取器 + AtlasMemorySystem + 分派式 memory server，59 测试全绿）；待双臂跑分验证 |
 | M3 | 主评测跑分 + 类型学统计 | 成绩表、SR@k 曲线、类型学统计 | ⬜ |
 | M3.5 | 多智能体编排接入 + 编排效果评估 | 编排对照结果 | ⬜ |
 | M4 | 开源交付 | README、demo、复盘博客 | ⬜ |
 
-## 9. 决策清单（v0.3，2026-10-03 逐项商定）
+## 9. 决策清单（v0.3，2026-10-03 逐项商定；#11–#14 于 2026-10-10 商定）
 
 | # | 事项 | 决策 |
 |---|---|---|
@@ -94,6 +94,10 @@
 | 8 | 对照阵容 | 复现 MAGE 简化版（C+R 组装、去树回滚）作中间对照；时间不允许降级为引用 MAGE 论文数字 |
 | 9 | 实现底座 | LangGraph 仅作角色编排控制流（数据流不走框架 state）；状态唯一真源 = 自研图引擎，不启用框架 checkpoint；若实现中该纪律不可守，退回纯 Python 自写（用户预设的回退条件） |
 | 10 | harness 周边 | CLI 评测 + CLI demo + 图状态 HTML/SVG 快照导出 + streamlit/gradio 演示页；权限 = 工具白名单 + 只读/可写分级 |
+| 11 | 结转节奏（math 域落地） | 每子任务边界结转：wrap 到新子任务时先结转上一个（LLM 提取入图 + 叙事摘要）；80% 阈值保留为兜底 |
+| 12 | 提取器分工 | 规则+LLM 混合：规则负责子任务注册/完成标记/判分记录；LLM 只抽语义状态（Fact/Constraint/Decision/Artifact，含 supersede 作废更新），输出严格 JSON，解析失败降级为规则摘要 |
+| 13 | Atlas 上下文预算 | 8000 tokens（组装器总预算；实测本域自然需求 3–5k，基线全篇 10–25k） |
+| 14 | judge 口径 | 两臂 `judge_result_in_memory=true`（判分进记忆条目，公平可比）；旧口径（false）已跑那篇存档 `runs/stale_judge_false/`，待重跑 |
 
 已定不再重议：节点六类（Goal/Subtask/Constraint/Decision/Artifact/Fact）+ 行动者字段（选题定稿已含）。
 
@@ -103,8 +107,11 @@
 - 2026-10-03（上午）：形态原定 fork pi + 逐部件改造 + 自有品牌（对标 OMP）——同日晚间被下述决策取代。
 - 2026-10-03（定稿）：项目目标 = 实习准备（开源 GitHub 即可，非论文，创新性不作要求）；基座与语言不作为决策因素；选题定稿为"**面向 long-horizon 的记忆增强 + 上下文管理 + 多智能体编排**"；多智能体以内部编排形态跑现有 long-horizon 评测（MemoryArena 接口已核实可行）；agent 角色数量与组合待定；术语沿用约定——统一用"图状态记忆/状态层"，禁用"账本"比喻。
 - 2026-10-03（晚）：第 9 节清单逐项商定并回填（作废机制=时效字段+决策变迁；结转=子目标边界+阈值兜底；查账=规则式；组装=四区+动态预算；角色=Planner/Worker/Auditor；指标=三件套；协议=官方 runner+抽样；对照=复现 MAGE 简化版；harness=CLI+快照+Web UI）。底座定为 LangGraph：仅承担角色编排控制流，角色间数据流走共享图而非框架 state，不启用框架 checkpoint；实现中若此纪律不可守，按用户预设条件退回纯 Python 自写。
+- 2026-10-10：M2 接入层四项决策商定（#11 每子任务边界结转；#12 规则+LLM 混合提取器；#13 预算 8k；#14 两臂 judge 入记忆），同日落地实现（LLM 结转提取器 + AtlasMemorySystem + 分派式 memory server；TDD 59 测试）。
 
 ## 11. 进度日志（最新在上）
+
+- 2026-10-10（下午）：**M2 接入层实现（决策 #11–#14 落地）**——新增 `atlas/context/extractor.py`（LLM 结转提取器：严格 JSON、逐操作校验跳过、DEPENDS_ON 防环、supersede 作废、解析失败降级）、`atlas/service.py`（AtlasMemorySystem：每子任务边界结转、规则注册子任务/判分记录、H 区答错提示、组装失败降级为计划区）、`eval/atlas_memory_server.py`（单端口按 memory_system_name 分派 long_context/atlas，A/B 只差 config 一行；`lite_memory_server.py` 并入后删除）、`eval/configs/math_atlas.json`；双臂 judge 口径统一为 true（决策 #14），旧口径已跑那篇移至 `runs/stale_judge_false/` 存档待重跑；`run_math.sh` 支持传入 config。TDD 新增 17 测试（59 全绿）。跑分仍暂停（按用户指示，等续跑指令）。
 
 - 2026-10-10：**M1 跑分中断诊断 + 代理修复入库**——抽样跑分在 1/10 篇（2312.05134_part_2：8 子任务，2/8 正确，平均 164s/子任务）后中断，根因：shell 继承的 `HTTP(S)_PROXY` 指向 Clash，而 config 本地服务地址写 `0.0.0.0`（不在 `NO_PROXY`）→ 对本地服务的请求误走代理，Clash 短暂不可用即全挂；进程随后消失（疑随会话回收）。修复：`run_math.sh`/`start_servers.sh` 补 `no_proxy` 旁路（0.0.0.0/127.0.0.1/localhost）、config 本地 base_url 改 `127.0.0.1`、README 补代理与 nohup 说明；正反两组验证通过（死代理下本地调用仍通）。**用户拍板：暂不续跑**（剩余 9 篇/87 子任务，断点续跑就绪）；M2 收尾按"先摊开设计再动手"推进（提取器与接入形态给选项待拍板）。附带记录上游两处怪癖：runner 尾部 `main()` 被调用两次（第二遍因断点续跑全跳过，无害）；`is_paper_correct` 取的是末题正确性。
 - 2026-10-10：**M1 抽样跑分启动（决策 #7）**——opencode go 通道接入完成：端点 `opencode.ai/zen/go/v1` 必须带 `x-opencode-session` 与自有 User-Agent 头（缺头 400），补 `eval/opencode_compat/sitecustomize.py` 自动注入，实测简单调用 ~2s（对比 NIM 的 98s）。**修正**：初次误按全量 40 篇启动（偏离决策 #7 的抽样协议，已停），改为固定子集 **n=10、seed=20261010**（清单落 `runs/subset_formal_reasoning_math_n10_seed20261010.txt`，共 95 个子任务；Atlas 对照跑用同一清单）。踩坑与修复：① HF hub 偶发失败会触发 datasets 库缓存回退 bug（split 被拼进 config 名→ValueError），wrapper 改为**本地缓存直载优先**（`run_math_subset.py`），完全绕开 hub 依赖；② 后台输出要 `python -u` 才可见。抽样跑分后台执行中（断点续跑）。
