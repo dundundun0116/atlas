@@ -36,7 +36,8 @@ class AgentConfig:
     max_evidence: int = 20       # 送入答案上下文的最大证据块数（多轮累积后截断）
     use_dense: bool = True       # 混合检索：BM25 + 稠密向量两路 RRF（naive 级已含）
     use_rewrite: bool = False    # S4：多跳分解 + HyDE
-    use_wiki: bool = False       # S3：wiki 索引视图
+    use_wiki: bool = False       # S3：wiki 索引视图（已实测无净增益，保留开关作负结果复现）
+    use_kg: bool = False         # S3 重构：实体关系图 + PPR 三路等权融合（+③ 级）
     use_decision: bool = False   # S5：LLM 接管控制流（路由 / 计划 / 早停）
     answer_max_tokens: int = 1024                # 含思维链；过小会让推理吃光预算、答案为空
     answer_retry_budgets: tuple = (2048, 4096)   # 空答案重试预算阶梯（实测逐级提高可救回打转）

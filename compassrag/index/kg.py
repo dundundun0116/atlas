@@ -320,3 +320,41 @@ def ner_query(llm, question: str, *, budgets: tuple = (512, 1024),
         if entities is not None:
             return entities
     return None
+
+
+class KGSearcher:
+    """实体图检索工具（agent 工具接口 search(query, k) -> [(chunk_id, score)]）。
+
+    查询 → NER 缓存取实体（缓存按原问题文本索引；改写变体等未命中时自动回退
+    整查询嵌入 top-k 选种）→ 图上种子 → PPR → 块级排名。评测脚本与 agent 共用
+    同一实现，保证检索层实验与 QA 行口径一致。
+    """
+
+    def __init__(self, graph: EntityGraph, embedder,
+                 ner_by_question: dict[str, list[str]] | None = None,
+                 *, damping: float = 0.5):
+        self.graph = graph
+        self.embedder = embedder
+        self.ner_by_question = ner_by_question or {}
+        self.damping = damping
+
+    @classmethod
+    def load(cls, dir_path: Path, embedder, *, damping: float = 0.5) -> "KGSearcher":
+        dir_path = Path(dir_path)
+        graph = EntityGraph.load(dir_path)
+        ner_path = dir_path / "query_entities.jsonl"
+        ner: dict[str, list[str]] = {}
+        if ner_path.exists():
+            for line in ner_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    r = json.loads(line)
+                    ner[r["question"]] = r.get("entities", [])
+        return cls(graph, embedder, ner, damping=damping)
+
+    def search(self, query: str, k: int = 10) -> list[tuple[str, float]]:
+        qv = np.asarray(self.embedder.encode([query])[0], dtype=np.float32)
+        seeds = self.graph.match_seeds(qv, entities=self.ner_by_question.get(query),
+                                       embedder=self.embedder)
+        ppr = self.graph.ppr(seeds, damping=self.damping)
+        return self.graph.rank_passages(ppr, k=k)

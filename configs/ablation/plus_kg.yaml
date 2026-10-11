@@ -1,0 +1,15 @@
+# 消融第 2 级（+③ 实体图索引，2026-10-11 重构）：naive + 实体关系图三路等权融合
+# 检索 = BM25 + dense + 实体图 PPR 三路 RRF（等权）——检索层实测（小库 300 题）：
+# recall@20 0.826 / full_hit@20 0.620，vs hybrid 0.754 / 0.487（+7.2pp / +13.3pp，45胜5负）。
+# 依赖：scripts/build_kg.py --finalize（小库图）+ scripts/ner_queries.py（查询 NER 缓存）。
+# 与 ② 叠加时另设 use_rewrite: true（变体查询无 NER 缓存命中时自动回退整查询选种）。
+agent:
+  top_k: 10
+  max_rounds: 1
+  use_dense: true
+  use_wiki: false
+  use_kg: true
+  use_rewrite: false
+  use_decision: false
+  answer_max_tokens: 1024
+  answer_retry_budgets: [2048, 4096]

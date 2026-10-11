@@ -6,6 +6,7 @@ import pytest
 from compassrag.index.kg import (
     EntityGraph,
     Extraction,
+    KGSearcher,
     extract_chunk,
     ner_query,
     parse_entities_json,
@@ -181,3 +182,35 @@ def test_ner_query_escalates_and_disables_thinking():
     assert ner_query(llm, "Who is Sikyona named after?") == ["Sikyona"]
     assert [c["max_tokens"] for c in llm.calls] == [512, 1024]
     assert all(c["thinking"] is False for c in llm.calls)
+
+
+class QueryEmb:
+    """查询嵌入 = [1,0]（命中节点 Alice）；实体嵌入 = 每词表 [0,1]（命中 Bob）。"""
+
+    def encode(self, texts):
+        if len(texts) == 1:
+            return np.array([[1.0, 0.0]], dtype=np.float32)
+        return np.tile(np.array([0.0, 1.0], dtype=np.float32), (len(texts), 1))
+
+
+def test_kg_searcher_tool_interface_and_ner_fallback(tmp_path):
+    # 两节点非对称图：Alice—Bob 三元组边；c0 含两节点、c1 只含 Bob
+    g = EntityGraph()
+    g.add_extraction(_ex("c0", ["Alice", "Bob"], [["Alice", "r", "Bob"]]))
+    g.add_extraction(_ex("c1", ["Bob"], []))
+    g.finalize(ListEmbedder([np.array([1.0, 0.0]), np.array([0.0, 1.0])]), syn_threshold=0.99)
+    g.save(tmp_path / "kg")
+    ner_path = tmp_path / "kg" / "query_entities.jsonl"
+    ner_path.write_text(json.dumps({"question": "关于 Alice？", "entities": ["Bob"]}) + "\n",
+                        encoding="utf-8")
+
+    searcher = KGSearcher.load(tmp_path / "kg", embedder=QueryEmb())
+    # NER 命中：实体 "Bob" → 种子节点 Bob → c0 与 c1 都含 Bob，均得分
+    hits = searcher.search("关于 Alice？", k=10)
+    assert {cid for cid, _ in hits} == {"c0", "c1"}
+    # 无 NER 缓存（如改写变体查询）→ 回退整查询选种：查询向量 [1,0] 命中 Alice（Bob 0 分也入种）
+    # PPR 收敛后 Alice=Bob=0.5 → c0 得分 2.0 > c1 的 1.0，确定序
+    hits2 = searcher.search("改写后的变体查询", k=10)
+    assert hits2[0][0] == "c0"
+    # k 截断生效
+    assert len(searcher.search("关于 Alice？", k=1)) == 1

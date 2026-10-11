@@ -20,6 +20,7 @@ from compassrag.corpus.benchmarks import BENCHMARKS, load_dev
 from compassrag.corpus.sample import stratified_subset
 from compassrag.eval.metrics import f1_score, em_score, recall_at_k
 from compassrag.eval.runner import run_records
+from compassrag.index.kg import KGSearcher
 from compassrag.index.wiki import WikiIndex
 from compassrag.llm.client import LLMClient
 from compassrag.retrieval.bm25 import BM25Index
@@ -37,6 +38,7 @@ def main():
     ap.add_argument("--index-dir", default=REPO_ROOT / "data" / "cache" / "bm25")
     ap.add_argument("--embeddings-dir", default=REPO_ROOT / "data" / "cache" / "embeddings")
     ap.add_argument("--wiki-dir", default=REPO_ROOT / "data" / "cache" / "wiki")
+    ap.add_argument("--kg-dir", default=REPO_ROOT / "data" / "cache" / "kg")
     ap.add_argument("--out-dir", default=REPO_ROOT / "runs" / "qa")
     ap.add_argument("--limit", type=int, default=None,
                     help="只跑分层比例子集的前 N 题（能子集不跑全量；后补全量时按 id 续跑天然复用）")
@@ -47,6 +49,8 @@ def main():
     agent_cfg = AgentConfig(**cfg["agent"])
     if agent_cfg.use_wiki and not agent_cfg.use_dense:
         raise SystemExit("use_wiki 依赖稠密向量通路（条目层/源块排序）——请同时开启 use_dense")
+    if agent_cfg.use_kg and not agent_cfg.use_dense:
+        raise SystemExit("use_kg 依赖稠密向量通路（查询/实体嵌入选种）——请同时开启 use_dense")
     llm = LLMClient()
     config_name = Path(args.config).stem
     embedder = LocalDenseEmbedder(device=args.device) if agent_cfg.use_dense else None
@@ -73,6 +77,9 @@ def main():
         if agent_cfg.use_wiki:
             tools["wiki"] = WikiIndex.load(Path(args.wiki_dir) / f"{bench}__{args.variant}",
                                            dense=tools["dense"], chunks=chunks)
+        if agent_cfg.use_kg:
+            tools["kg"] = KGSearcher.load(Path(args.kg_dir) / f"{bench}__{args.variant}",
+                                          embedder=embedder)
         print(f"[{bench}] 语料 {len(chunks)} 块；工具：{list(tools)}")
 
         agent = Agent(llm=llm, tools=tools, chunk_store=store, config=agent_cfg)

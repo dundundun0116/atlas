@@ -75,7 +75,7 @@
 |---|---|---|---|
 | S1 地基 | 仓库脚手架；`llm/` 客户端封装（openai 兼容 + 逐 token 遥测）+ LLM 通道联通；embedding 通路；三基准接入与分层抽样（清单入仓）；distractor 语料合并去重 + 分块 | 冒烟调用带遥测记录；抽样清单重跑可复现；语料统计表（块数 / token 数） | ✅ 2026-10-03（冒烟待新通道，见第 11 节） |
 | S2 朴素基线（消融第 0 级） | agent 主循环骨架（scripted 固定流程）；`IndexView` flat 模式（仅 chunk 层）+ BM25 / 向量混合检索 + RRF 融合去重 + 直接生成；`run_eval.py`（限并发 + 断点续跑）+ EM / F1 / 召回率计算 | 主三基准 300×3 出第一组基线数字（消融表 baseline 行） | ◐ **naive 行出数（100 题分层子集）**：EM 0.250 / F1 0.325 / 证据召回 0.665；hybrid 检索层完成；全量 300×3 留 S7 |
-| S3 实体图索引（③） | 为 agent 发新工具：HippoRAG 式实体关系图（逐块 LLM 抽取实体+三元组 → 跨文档实体图 + 同义边 → PPR 检索信号）；三路融合（BM25 + dense + kg） | +③ 行检索层数字；QA 行数字；索引内容可人工翻阅 | ◐ **检索层已出数（小库 300 题）**：hybrid_kg recall@20 0.826 / full_hit@20 0.620 vs hybrid 0.754 / 0.487（+7.2pp / +13.3pp，45 胜 5 负；2-hop +17.9pp、4-hop 翻倍）；等权融合显著优于降权与重排；**QA 行待跑（等发令）** |
+| S3 实体图索引（③） | 为 agent 发新工具：HippoRAG 式实体关系图（逐块 LLM 抽取实体+三元组 → 跨文档实体图 + 同义边 → PPR 检索信号）；三路融合（BM25 + dense + kg） | +③ 行检索层数字；QA 行数字；索引内容可人工翻阅 | ◐ **检索层已出数（小库 300 题）**：hybrid_kg recall@20 0.826 / full_hit@20 0.620 vs hybrid 0.754 / 0.487（+7.2pp / +13.3pp，45 胜 5 负；2-hop +17.9pp、4-hop 翻倍）；等权融合显著优于降权与重排；**已接入 agent**（`KGSearcher` 工具 + `use_kg` 开关 + `configs/ablation/plus_kg.yaml`，重构等价性 300/300 逐行验证）；QA 行待跑（等发令） |
 | S4 查询侧（②） | 为 agent 发新工具：多跳分解 + HyDE 假答案改写（默认开启），接入检索循环 | +② 行数字；消融开关全走 configs | ◐ **+② 行出数（100 题同题集）**：EM 0.290 / F1 0.391；2-hop 增益明显（EM +0.081）、3/4-hop 持平或略降（见 §11）；消融开关全走 configs ✅ |
 | S5 决策层（①） | 控制流交给 LLM——问题路由（直答 / 单跳 / 多跳）、检索计划与预算、充分度早停，全部成为 agent 循环内的决策；同预算对比实验 | +① 行数字；成本遥测报表（检索轮数 / token 分布）；**④ go/no-go 决策点**（三条件见第 9 节） | ◐ 实现完成（路由/计划 + 逐轮检索 + 充分度早停 + 预算上限 + 成本聚合，tests 101/101）；冒烟通过；+① 行数字与 ④ go/no-go 待跑 |
 | S6 自诊闭环（④，条件触发） | 证据-论断对齐检查；失败分型；修复动作（换词重查 / 换索引视图 / 拆细）；MultiHop-RAG null query 检测率与拒答 | +④ 行数字与可靠性叙事；若砍 → 降级为 30 例失败分型 case study | 未开始 |
@@ -217,3 +217,8 @@
     - 纯 PPR 的 full_hit 全深度超 hybrid（0.503 vs 0.487@20，0.430 vs 0.387@10）——图检索头部更准，正是"两跳都早到"的设计意图。
   - 产物：`runs/retrieval_{kg,hybrid_kg,hybrid_kgw_w0.5,hybrid_kgw_w0.3,hybrid_kgboost_b0.05,hybrid_kgboost_b0.02}/musique_samples.jsonl`；小库图 `data/cache/kg/musique__samples/`。
   - **下一步（等发令）**：① kg 作为检索工具接入 agent + `configs/ablation/plus_kg.yaml`；② +③ QA 行（100 题子集，预估调用 400-600 次 + 每题 1 次 NER，约 60-90 万 token）；③ 小库口径重跑 naive / +② 基线两行（约 81 万 token）以统一消融表口径——三者可合并为一次批准。
+- **2026-10-11 · ③ 接入 agent（用户令：先做第 1 项）**（全程本地零成本；tests 116/116）
+  - `KGSearcher` 工具类（`index/kg.py`）：agent 工具接口 `search(query, k)`，查询 NER 缓存选种、未命中（改写变体等）自动回退整查询嵌入选种——**评测脚本与 agent 共用同一实现**；`eval_retrieval.py` 重构为调用它，等价性 300/300 逐行验证通过。
+  - `AgentConfig.use_kg` 开关（agent 主循环零改动——工具字典天然驱动三路等权 RRF）；`eval_qa.py` 装配 kg 工具（依赖 use_dense 守卫）；`configs/ablation/plus_kg.yaml`（+③ 级 = naive + 实体图，与检索层实验同口径；与 ② 叠加只需再开 use_rewrite）。
+  - 真实小库冒烟通过（300 题工具加载 + 单题检索）。产物：本次无新 API 花费。
+  - 待发令：+③ QA 行（约 60-90 万 token）+ 小库基线两行重跑（约 81 万 token），见上一条目。

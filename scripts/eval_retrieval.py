@@ -22,8 +22,6 @@ import json
 import sys
 from pathlib import Path
 
-import numpy as np
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -93,17 +91,15 @@ def _build_searcher(family, bench, chunks, chunk_ids, args, embedder):
     if family in ("wiki", "hybrid_wiki", "hybrid_wwiki", "hybrid_eprior"):
         wiki = WikiIndex.load(Path(args.wiki_dir) / f"{bench}__{args.variant}", dense=dense, chunks=chunks)
     if family in ("kg", "hybrid_kg", "hybrid_kgw", "hybrid_kgboost"):
-        from compassrag.index.kg import EntityGraph
+        from compassrag.index.kg import EntityGraph, KGSearcher
         kg_dir = Path(args.kg_dir) / f"{bench}__{args.variant}"
-        kg = EntityGraph.load(kg_dir)
         ner_cache = _load_query_entities(kg_dir)
-        print(f"[{bench}] 实体图：{len(kg.nodes)} 节点 / NER 缓存 {len(ner_cache)} 题")
+        kg_searcher = KGSearcher(EntityGraph.load(kg_dir), embedder, ner_cache,
+                                 damping=args.kg_damping)
+        print(f"[{bench}] 实体图：{len(kg_searcher.graph.nodes)} 节点 / NER 缓存 {len(ner_cache)} 题")
 
     def kg_search(query, k):
-        qv = np.asarray(embedder.encode([query])[0], dtype=np.float32)
-        seeds = kg.match_seeds(qv, entities=ner_cache.get(query), embedder=embedder)
-        ppr = kg.ppr(seeds, damping=args.kg_damping)
-        return kg.rank_passages(ppr, k=k)
+        return kg_searcher.search(query, k)
 
     def search(query, k):
         if family == "bm25":
