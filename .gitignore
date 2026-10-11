@@ -16,3 +16,7 @@ venv/
 runs/
 cache/
 *.log
+
+# 内部过程文档（不入库，本地保留）
+PROJECT.md
+AGENTS.md
