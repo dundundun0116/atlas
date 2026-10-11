@@ -1,4 +1,4 @@
-"""Atlas CLI（决策 #10）：当前提供图状态快照导出，demo 子命令后续添加。
+"""Atlas CLI：当前提供图状态快照导出，demo 子命令后续添加。
 
 用法：
     python -m atlas.cli export runs/graphs/<user_id>.jsonl --out snapshot.html

@@ -1,10 +1,10 @@
-"""多智能体编排（决策 #15–#17）：Planner → Worker → Auditor →（必要时）Worker 修订。
+"""多智能体编排：Planner → Worker → Auditor →（必要时）Worker 修订。
 
 - 每个子任务内做多次内部 LLM 调用（不进环境），最后收敛为一个动作——适配 MemoryArena
   的"每子任务单动作"硬约束；
-- 协调全经共享图（决策 #16）：角色把结论/疑虑写入图（role_note），下一角色读图状态视图
+- 协调全经共享图：角色把结论/疑虑写入图（role_note），下一角色读图状态视图
   （state_view）而非对话历史；
-- 固定三段式（决策 #15）：Planner 定路线（Decision 节点）→ Worker 解题（Artifact 草稿）→
+- 固定三段式：Planner 定路线（Decision 节点）→ Worker 解题（Artifact 草稿）→
   Auditor 核验（Fact 疑虑）→ 仅当 Auditor 判"需修订"时 Worker 修订（作废草稿、记原因）。
 
 LLM 与图客户端均注入（测试用替身；生产为 openai 客户端与 memory server HTTP）。

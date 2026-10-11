@@ -90,7 +90,7 @@ class TestSupersede:
             engine.supersede_with(d1.id, new_content="d3", reason="r3")
 
     def test_supersede_artifact(self, engine):
-        """编排修订：修订稿作废草稿（决策 #15）。"""
+        """编排修订：修订稿作废草稿。"""
         a1 = engine.add_artifact("草稿答案")
         a2 = engine.supersede_with(a1.id, new_content="修订答案", reason="auditor 打回：常数项错")
         assert a1.status == NodeStatus.SUPERSEDED

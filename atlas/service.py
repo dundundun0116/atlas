@@ -1,12 +1,12 @@
-"""MemoryArena 接入形态：图引擎 + 结转 + 组装器的官方 memory 系统等价物（决策 #11–#14）。
+"""MemoryArena 接入形态：图引擎 + 结转 + 组装器的官方 memory 系统等价物。
 
 节奏（math 域：每子任务一次 wrap + 一次 add）：
 - `wrap_user_prompt(q)`：① 若缓冲非空 → 先结转上一子任务（LLM 提取入图 + 叙事摘要）并标记完成；
   ② 注册当前子任务节点（规则，只存 PROBLEM 部分）；③ 组装四区上下文，包成与基线同形的
   `<memory_context>…</memory_context>\nUser: {q}`。
-- `add_chunk(chunk)`：追加原始记录到缓冲；结转发生在下一个 wrap 边界（决策 #11：每子任务边界）。
+- `add_chunk(chunk)`：追加原始记录到缓冲；结转发生在下一个 wrap 边界。
 
-判分口径（决策 #14）：chunk 含 `## Judge: CORRECT/INCORRECT` 时解析并写入子任务 note + 失败标记
+判分口径：chunk 含 `## Judge: CORRECT/INCORRECT` 时解析并写入子任务 note + 失败标记
 （H 区提示）；缺失则视为无判分信息（官方 judge_result_in_memory=false 时的行为）。
 
 组装不变量被破坏（查账失败/计划区溢出/依赖环）时降级为计划区并记录到 `assemble_errors`，
@@ -23,7 +23,7 @@ from atlas.context.extractor import LLMCarryOverExtractor
 from atlas.memory.engine import GraphMemoryEngine
 from atlas.memory.schema import NodeStatus
 
-DEFAULT_BUDGET_TOKENS = 8000  # 决策 #13
+DEFAULT_BUDGET_TOKENS = 8000  # 上下文组装总预算
 _SUBTASK_CONTENT_LIMIT = 1000
 _JUDGE_RE = re.compile(r"##\s*Judge:\s*(CORRECT|INCORRECT)", re.IGNORECASE)
 
@@ -72,8 +72,8 @@ class AtlasMemorySystem:
         self.extract_errors: List[str] = []
         self.assemble_errors: List[str] = []
         self.dump_errors: List[str] = []
-        self.dump_path = dump_path          # 图状态快照路径（决策 #10；None 表示不落盘）
-        self._last_draft_artifact: Optional[str] = None  # 供 auditor 打回后的修订作废（决策 #15）
+        self.dump_path = dump_path          # 图状态快照路径
+        self._last_draft_artifact: Optional[str] = None  # 供 auditor 打回后的修订作废
 
     # ---------- 官方三端点对应的行为 ----------
 
@@ -135,7 +135,7 @@ class AtlasMemorySystem:
         self.carries += 1
         self.pending_subtask = None
 
-    # ---------- 多智能体编排的图接口（决策 #15–#17：协调全经共享图） ----------
+    # ---------- 多智能体编排的图接口 ----------
 
     def state_view(self, role: str) -> str:
         """给角色的图状态视图（计划区 + 踩坑提示）：角色据此协调，而非读对话历史。"""
@@ -192,7 +192,7 @@ class AtlasMemorySystem:
             return self.assembler.render_plan()
 
     def _dump(self) -> None:
-        """图状态快照（决策 #10：HTML/SVG 导出的数据源）；快照失败绝不影响跑分。"""
+        """图状态快照；快照失败绝不影响跑分。"""
         if not self.dump_path:
             return
         try:

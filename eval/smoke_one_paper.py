@@ -42,7 +42,7 @@ def main() -> None:
     if (cfg.get("agent") or {}).get("orchestration"):
         from atlas_agent import maybe_enable_orchestration  # eval/ 在 sys.path（脚本目录）
 
-        maybe_enable_orchestration(cfg, run_math)  # 决策 #17：config 一行开关
+        maybe_enable_orchestration(cfg, run_math)  # config 一行开关
 
     ds = _load_local(cfg["task_specific"]["dataset"]["hf_config"])
     row = next((r for r in ds if r["paper_name"] == paper_name), None)

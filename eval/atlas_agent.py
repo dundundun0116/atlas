@@ -1,4 +1,4 @@
-"""Atlas 编排 agent（决策 #15–#17）：把多智能体编排挂到官方 MathAgent 上。
+"""Atlas 编排 agent：把多智能体编排挂到官方 MathAgent 上。
 
 - runner 里的 MathAgent 由入口脚本 monkeypatch 替换（不改官方代码，见
   maybe_enable_orchestration）；编排开关 = config 的 `agent.orchestration` 一行；
@@ -25,7 +25,7 @@ JSON_MAX_TOKENS = int(os.getenv("ATLAS_ROLE_JSON_MAX_TOKENS", "4000"))  # 机械
 
 
 class MemoryServerGraphClient:
-    """共享图客户端（HTTP；协调全经图，决策 #16）。"""
+    """共享图客户端（HTTP；协调全经图）。"""
 
     def __init__(self, base_url: str, timeout: int = 180):
         self.base_url = base_url.rstrip("/")
@@ -112,7 +112,7 @@ class OrchestratedMathAgent(MathAgent):
 
 
 def maybe_enable_orchestration(cfg: dict, run_math_module) -> bool:
-    """config 一行开关（决策 #17）：agent.orchestration=true 时替换 runner 的 MathAgent。"""
+    """config 一行开关：agent.orchestration=true 时替换 runner 的 MathAgent。"""
     if not (cfg.get("agent") or {}).get("orchestration"):
         return False
     run_math_module.MathAgent = OrchestratedMathAgent

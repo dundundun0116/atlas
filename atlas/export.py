@@ -1,4 +1,4 @@
-"""图状态快照导出（决策 #10）：把图引擎渲染成自包含的 SVG / HTML。
+"""图状态快照导出：把图引擎渲染成自包含的 SVG / HTML。
 
 - 布局：按节点类型分列（goal → subtask → constraint → decision → fact → artifact），
   列内按创建顺序自上而下；边按类型着色/线型（依赖虚线、作废红色点线等）。

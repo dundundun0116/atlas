@@ -1,6 +1,6 @@
 """AtlasMemorySystem（MemoryArena 接入形态）测试：wrap/add 循环、边界结转、判分、降级。
 
-LLM 用替身注入，token 计数用空白词计数器，离线可跑（决策 #11–#14）。
+LLM 用替身注入，token 计数用空白词计数器，离线可跑。
 """
 
 import json

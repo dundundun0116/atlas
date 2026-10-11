@@ -1,4 +1,4 @@
-"""离线演示（决策 #10）：脚本化提取器跑一段迷你会话，展示图状态记忆 + 四区组装 + 快照导出。
+"""离线演示：脚本化提取器跑一段迷你会话，展示图状态记忆 + 四区组装 + 快照导出。
 
 不需要任何 API 凭据：提取器用脚本化替身（真实 LLM 提取器见 eval/atlas_memory_server.py 与
 eval/atlas_agent.py）。演示场景用旅行规划（Goal/Subtask/Constraint/Decision/Artifact/Fact

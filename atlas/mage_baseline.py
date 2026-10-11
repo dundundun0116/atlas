@@ -1,4 +1,4 @@
-"""MAGE 简化基线（MAGELiteMemorySystem）：叙事摘要记忆，Atlas 的中间对照臂（决策 #8）。
+"""MAGE 简化基线（MAGELiteMemorySystem）：叙事摘要记忆，Atlas 的中间对照臂。
 
 复现边界（精读笔记 #8）：无树、无 Maintain、无 Revise——Update = 子任务边界用 LLM
 把上一子任务原始记录压缩成一条叙事摘要（C 区累计）、清近期区；Retrieve = 返回 C+R，

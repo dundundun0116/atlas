@@ -1,6 +1,6 @@
-"""LLM 结转提取器：把原始记录段结构化写入图（决策 #11–#13 的落地）。
+"""LLM 结转提取器：把原始记录段结构化写入图。
 
-分工（决策 #12：规则+LLM 混合）：
+分工：
 - 规则负责确定性动作：子任务注册、完成标记、判分记录（见 atlas/service.py）；
 - LLM 只做语义状态：goal/fact/constraint/decision/artifact 节点、依赖边、作废更新。
 
@@ -18,7 +18,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from atlas.memory.engine import GraphMemoryEngine
 from atlas.memory.schema import EdgeType, NodeStatus, NodeType
 
-# LLM 允许新建的节点类型；Subtask 由规则注册（决策 #12），Goal 只允许建一次
+# LLM 允许新建的节点类型；Subtask 由规则注册，Goal 只允许建一次
 _LLM_NODE_TYPES: Dict[str, NodeType] = {
     "goal": NodeType.GOAL,
     "fact": NodeType.FACT,

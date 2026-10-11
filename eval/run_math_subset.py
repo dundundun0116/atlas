@@ -1,4 +1,4 @@
-"""math 域 long_context 基线的抽样子集入口（决策 #7：每域固定 n、固定种子）。
+"""math 域 long_context 基线的抽样子集入口。
 
 用法：eval/run_math.sh            # 默认 n=10, seed=20261010
       SUBSET_N=20 eval/run_math.sh
@@ -77,5 +77,5 @@ if __name__ == "__main__":
     if (cfg.get("agent") or {}).get("orchestration"):
         from atlas_agent import maybe_enable_orchestration  # eval/ 在 sys.path（脚本目录）
 
-        maybe_enable_orchestration(cfg, run_math)  # 决策 #17：config 一行开关
+        maybe_enable_orchestration(cfg, run_math)  # config 一行开关
     run_math.main(cfg)

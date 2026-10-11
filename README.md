@@ -1,7 +1,7 @@
 # Atlas
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="Atlas 架构图" width="820">
+  <img src="docs/architecture.png" alt="Atlas 功能示意图" width="880">
 </p>
 
 ![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
@@ -67,7 +67,7 @@ external/MemoryArena/.venv/bin/python eval/summarize.py runs/json/math --out run
 
 - **基准**：MemoryArena `formal_reasoning_math` 域——多会话相互依赖的论文推理任务，一篇论文对应一个记忆会话，后面的子任务依赖前面的结论；
 - **协议**：官方 runner 原样使用，抽样子集（固定种子、可复现），各臂共用同一清单；
-- **对照**：官方全历史基线 / Atlas（图状态记忆）/ Atlas + 编排 / 叙事摘要简化基线（MAGE 式，决策 #8 的中间对照）；
+- **对照**：官方全历史基线 / Atlas（图状态记忆）/ Atlas + 编排 / 叙事摘要简化基线（MAGE 式）；
 - **指标**：官方口径——progress score（子任务正确率）、pass rate（末题正确占比）、memory_length（上下文 token，省 token 度量）。
 
 ## 项目结构

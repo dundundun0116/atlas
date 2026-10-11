@@ -1,13 +1,13 @@
 """Atlas 记忆服务：一个端口按 memory_system_name 分派（long_context / atlas）。
 
 - long_context：复用官方 LongContextMemorySystem（与 lite_memory_server.py 相同逻辑）；
-- atlas：AtlasMemorySystem（图状态记忆 + 结转 + 四区组装；决策 #11–#14），
+- atlas：AtlasMemorySystem（图状态记忆 + 结转 + 四区组装），
   提取器走 openai 客户端（OPENAI_API_KEY/OPENAI_BASE_URL；opencode 兼容层经 PYTHONPATH 生效）。
 
 接口与官方 memory/server.py 一致（/memory/initialize|add|wrap_user_prompt），
 因此 M3 的 A/B 只差 config 里 memory_system_name 一行。
 提取器模型默认 deepseek-v4.1-flash（可用 ATLAS_EXTRACTOR_MODEL 覆盖），
-预算默认 8000 tokens（决策 #13，可用 ATLAS_BUDGET_TOKENS 覆盖）。
+预算默认 8000 tokens。
 """
 
 import importlib.util
@@ -45,7 +45,7 @@ EXTRACTOR_MAX_TOKENS = int(os.getenv("ATLAS_EXTRACTOR_MAX_TOKENS", "8000"))
 # 提取是机械性抽取任务，不需要长推理：opencode go 端点支持 thinking.type=disabled
 # （实测推理 token 归零、单次从 17 分钟降到秒级）。设 ATLAS_EXTRACTOR_THINKING=on 可恢复。
 EXTRACTOR_NO_THINK = os.getenv("ATLAS_EXTRACTOR_THINKING", "off").strip().lower() != "on"
-# 图状态快照目录（决策 #10）：每次 wrap 落盘 <user_id>.jsonl，供 CLI 导出 HTML/SVG 与事后核查；
+# 图状态快照目录：每次 wrap 落盘 <user_id>.jsonl，供 CLI 导出 HTML/SVG 与事后核查；
 # 设为空串可关闭。
 GRAPH_DUMP_DIR = os.getenv("ATLAS_GRAPH_DUMP_DIR", os.path.join(ROOT, "runs", "graphs"))
 
@@ -168,7 +168,7 @@ def initialize(req: InitializeRequest):
             dump_path=dump_path,
         )
     elif req.memory_system_name == "mage":
-        # MAGE 简化基线（决策 #8）：叙事摘要记忆（C=子任务边界 LLM 摘要累计，R=空），
+        # MAGE 简化基线：叙事摘要记忆（C=子任务边界 LLM 摘要累计，R=空），
         # 与 Atlas 同边界结转、同 LLM，对照"叙事摘要 vs 结构化图"这一假设
         SYSTEMS[req.user_id] = MAGELiteMemorySystem(
             req.user_id, llm=OpenAIChatLLM(), token_counter=count_tokens,
@@ -217,13 +217,13 @@ def _current_atlas() -> AtlasMemorySystem:
 
 @app.post("/memory/state_view")
 def state_view(req: StateViewRequest):
-    """编排角色读共享图（决策 #16）：返回计划区 + 踩坑提示。"""
+    """编排角色读共享图：返回计划区 + 踩坑提示。"""
     return {"view": _current_atlas().state_view(req.role)}
 
 
 @app.post("/memory/role_note")
 def role_note(req: RoleNoteRequest):
-    """编排角色写共享图（决策 #16）：结论/疑虑落成节点，actor 标记角色。"""
+    """编排角色写共享图：结论/疑虑落成节点，actor 标记角色。"""
     try:
         return _current_atlas().role_note(req.role, req.kind, req.content, req.reason, req.evidence)
     except ValueError as e:
