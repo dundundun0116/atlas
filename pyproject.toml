@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dense = ["sentence-transformers>=2.7"]   # 本地 BGE-M3 稠密检索（首跑自动从 HF 拉模型）
 dev = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]
