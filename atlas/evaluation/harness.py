@@ -1,0 +1,322 @@
+"""阶段 F 的离线 harness：同一 fixture、同一预算，只换记忆策略与注入故障。
+
+之所以离线：真实端点的吞吐波动约 10 倍，小样本数字会让"策略差异"淹没在噪声里。
+harness 里的研究者是**脚本化的**——能不能答对只取决于上下文里有没有它需要的东西，
+所以策略差异、故障恢复、指标口径都能反复复现，等真正跑评测时只需换研究者实现。
+"""
+
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, List, Optional, Sequence
+
+from atlas.evaluation.fixtures import Fixture, Subtask
+from atlas.evaluation.policies import MemoryPolicy, MemoryState, count_words
+from atlas.tools.protocol import ResearchToolError
+
+
+@dataclass
+class Faults:
+    """五类故障注入（索引是子任务下标，-1 = 不注入）。"""
+
+    tool_timeout_at: int = -1
+    empty_response_at: int = -1
+    interrupt_at: int = -1
+    duplicate_submit_from: int = -1
+    stale_decision_at: int = -1
+
+
+@dataclass
+class StepResult:
+    subtask_id: str
+    completed: bool
+    violation: bool = False
+    stale_misuse: bool = False
+    revised: bool = False
+    context_tokens: int = 0
+    answer: str = ""
+    error: str = ""
+    attempts: int = 1
+    model_calls: int = 1
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "StepResult":
+        known = {f for f in cls.__dataclass_fields__}
+        return cls(**{k: v for k, v in payload.items() if k in known})
+
+
+@dataclass
+class RunResult:
+    task_id: str
+    family: str
+    policy: str
+    completed: bool
+    steps: List[StepResult] = field(default_factory=list)
+    interrupted: bool = False
+    recovered: bool = False
+    replayed: bool = False
+    terminal_state: str = "completed"
+    context_tokens: int = 0
+    model_calls: int = 0
+    latency_ms: float = 0.0
+    cost_usd: float = 0.0
+
+    # ---------- 汇总口径 ----------
+
+    @property
+    def violations(self) -> int:
+        return sum(1 for s in self.steps if s.violation)
+
+    @property
+    def stale_misuses(self) -> int:
+        return sum(1 for s in self.steps if s.stale_misuse)
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload = asdict(self)
+        payload["steps"] = [s.to_dict() for s in self.steps]
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "RunResult":
+        data = dict(payload)
+        data["steps"] = [StepResult.from_dict(s) for s in payload.get("steps", [])]
+        known = {f for f in cls.__dataclass_fields__}
+        return cls(**{k: v for k, v in data.items() if k in known})
+
+
+class ScriptedResearcher:
+    """脚本化研究者：答案取决于「上下文里有没有前序事实 / 约束 / 过期值」。"""
+
+    def __init__(self, fixture: Fixture):
+        self.fixture = fixture
+
+    def answer(self, subtask: Subtask, context: str) -> Dict[str, Any]:
+        lines: List[str] = []
+        violation = False
+        stale_misuse = False
+        has_earlier = (not subtask.needs_earlier_fact) or (subtask.needs_earlier_fact in context)
+        constraints_visible = all(c in context for c in self.fixture.constraints)
+        if subtask.forbidden_method:
+            if constraints_visible:
+                lines.append(f"（遵守约束：不{subtask.forbidden_method}）")
+            else:
+                violation = True
+                lines.append(f"（{subtask.forbidden_method}）")
+        if has_earlier:
+            lines.append(subtask.required_fact)
+        else:
+            lines.append("无法确定：缺少前序结论")
+        # 误用判定：旧值出现在某一行、而那一行没有"作废/修订"标记
+        if subtask.stale_value and any(
+            subtask.stale_value in line and "作废" not in line
+            for line in context.splitlines()
+        ):
+            stale_misuse = True
+            lines.append(f"采用旧值 {subtask.stale_value}")
+        completed = has_earlier and subtask.required_fact in "\n".join(lines)
+        return {
+            "answer": "\n".join(lines),
+            "completed": completed,
+            "violation": violation,
+            "stale_misuse": stale_misuse,
+        }
+
+
+class ResearchHarness:
+    """跑一个 fixture：逐子任务取上下文 → 研究 → 记产出（可注入故障）。"""
+
+    def __init__(self, fixture: Fixture, policy: MemoryPolicy,
+                 price_per_1k_tokens: float = 0.002):
+        self.fixture = fixture
+        self.policy = policy
+        self.researcher = ScriptedResearcher(fixture)
+        self.price_per_1k = price_per_1k_tokens
+        self.state = MemoryState(
+            records=list(fixture.seed_records),
+            summaries=list(fixture.seed_summaries),
+            constraints=list(fixture.constraints),
+        )
+        absorb = getattr(policy, "absorb", None)
+        if callable(absorb):
+            for record in fixture.seed_records:
+                absorb(self.state, record)
+        self.steps: List[StepResult] = []
+        self.cursor = 0
+        self.model_calls = 0
+        self.context_tokens = 0
+        self._idempotent: Dict[int, StepResult] = {}
+
+    # ---------- 对外入口 ----------
+
+    def run(self, faults: Optional[Faults] = None) -> RunResult:
+        faults = faults or Faults()
+        if faults.interrupt_at >= 0:
+            snapshot = self.run_until(faults.interrupt_at, Faults())
+            result = self.resume(snapshot, faults)
+            result.interrupted = True
+            result.recovered = result.completed
+            return result
+        return self._run_from(self.cursor, faults)
+
+    def run_until(self, index: int, faults: Optional[Faults] = None) -> Dict[str, Any]:
+        """跑到指定子任务之前停下，返回可序列化的快照（模拟进程被杀）。"""
+        self._run_from(self.cursor, faults or Faults(), stop_before=index)
+        return self.snapshot()
+
+    def snapshot(self) -> Dict[str, Any]:
+        engine = getattr(self.policy, "engine", None)
+        return {
+            "task_id": self.fixture.task_id,
+            "policy": self.policy.name,
+            "cursor": self.cursor,
+            "records": list(self.state.records),
+            "summaries": list(self.state.summaries),
+            "engine": engine.to_snapshot() if engine is not None else None,
+            "steps": [s.to_dict() for s in self.steps],
+            "model_calls": self.model_calls,
+            "context_tokens": self.context_tokens,
+            "idempotent": {str(k): v.to_dict() for k, v in self._idempotent.items()},
+        }
+
+    def resume(self, snapshot: Dict[str, Any], faults: Optional[Faults] = None) -> RunResult:
+        """从快照恢复：策略状态、已完成的步骤、幂等缓存都接回来。"""
+        self.cursor = int(snapshot["cursor"])
+        self.state.records = list(snapshot.get("records", []))
+        self.state.summaries = list(snapshot.get("summaries", []))
+        self.steps = [StepResult.from_dict(s) for s in snapshot.get("steps", [])]
+        self.model_calls = int(snapshot.get("model_calls", 0))
+        self.context_tokens = int(snapshot.get("context_tokens", 0))
+        self._idempotent = {
+            int(k): StepResult.from_dict(v) for k, v in snapshot.get("idempotent", {}).items()
+        }
+        if snapshot.get("engine"):
+            from atlas.memory.engine import GraphMemoryEngine
+
+            engine = GraphMemoryEngine.from_snapshot(snapshot["engine"])
+            self.policy.engine = engine
+            self.policy.assembler.engine = engine
+        result = self._run_from(self.cursor, faults or Faults())
+        return result
+
+    # ---------- 内部 ----------
+
+    def _run_from(self, start: int, faults: Faults, stop_before: int = -1) -> RunResult:
+        index = start
+        while index < len(self.fixture.subtasks):
+            if stop_before >= 0 and index >= stop_before:
+                break
+            subtask = self.fixture.subtasks[index]
+            if faults.stale_decision_at == index and self.fixture.stale_values:
+                stale = self.fixture.stale_values[0]
+                injected = f"旧决策: 常数项 {stale}（来自旧版本记录）"
+                if injected not in self.state.records:
+                    self.state.records.append(injected)
+                    absorb = getattr(self.policy, "absorb", None)
+                    if callable(absorb):
+                        absorb(self.state, injected)
+            context = self.policy.context(self.state, subtask.question)
+            tokens = self.policy.count(context)
+            self.context_tokens += tokens
+
+            if faults.duplicate_submit_from >= 0 and index >= faults.duplicate_submit_from:
+                cached = self._idempotent.get(index)
+                if cached is not None:
+                    self.steps.append(cached)
+                    index += 1
+                    continue
+                step = self._study(subtask, context, tokens, index, faults)
+                self._idempotent[index] = step
+                self.steps.append(step)
+                self._finish_step(subtask, step)
+                index += 1
+                continue
+
+            step = self._study(subtask, context, tokens, index, faults)
+            self.steps.append(step)
+            self._finish_step(subtask, step)
+            index += 1
+
+        self.cursor = min(index, len(self.fixture.subtasks))
+        return self._result()
+
+    def _study(self, subtask: Subtask, context: str, tokens: int,
+               index: int, faults: Faults) -> StepResult:
+        attempts = 0
+        empty_retry_done = False
+        while True:
+            attempts += 1
+            self.model_calls += 1
+            if faults.empty_response_at == index and attempts == 1:
+                continue  # 模型空响应：按策略重试一次
+            if faults.tool_timeout_at == index:
+                if attempts < 2:
+                    continue  # 第一次超时：按策略重试一次
+                return StepResult(
+                    subtask_id=subtask.subtask_id, completed=False, context_tokens=tokens,
+                    error="timeout", attempts=attempts, model_calls=attempts,
+                )
+            outcome = self.researcher.answer(subtask, context)
+            if not outcome["answer"].strip() and not empty_retry_done:
+                empty_retry_done = True
+                continue  # 空响应重试一次
+            return StepResult(
+                subtask_id=subtask.subtask_id,
+                completed=bool(outcome["completed"]),
+                violation=bool(outcome["violation"]),
+                stale_misuse=bool(outcome["stale_misuse"]),
+                revised=self.fixture.requires_revision and subtask.forbidden_method != "",
+                context_tokens=tokens,
+                answer=outcome["answer"],
+                attempts=attempts,
+                model_calls=attempts,
+            )
+
+    def _finish_step(self, subtask: Subtask, step: StepResult) -> None:
+        if not step.completed:
+            return
+        # 真实轨迹里工具输出很长：这一截是"全历史"策略的 token 成本来源
+        raw_trace = " ".join(f"chunk{i}=候选证据片段" for i in range(24))
+        record = (
+            f"fact: {subtask.required_fact}\n"
+            f"[完成] {subtask.subtask_id}: {subtask.question}\n"
+            f"[原始工具输出] {raw_trace}"
+        )
+        summary = f"[{subtask.subtask_id}] {subtask.question} → {subtask.required_fact}"
+        self.policy.observe(self.state, record, summary)
+
+    def _result(self) -> RunResult:
+        completed = bool(self.steps) and all(s.completed for s in self.steps)
+        return RunResult(
+            task_id=self.fixture.task_id,
+            family=self.fixture.family,
+            policy=self.policy.name,
+            completed=completed and self.cursor >= len(self.fixture.subtasks),
+            steps=list(self.steps),
+            terminal_state="completed" if completed else "failed",
+            context_tokens=self.context_tokens,
+            model_calls=self.model_calls,
+            latency_ms=round(self.context_tokens * 0.5 + self.model_calls * 8.0, 2),
+            cost_usd=round(self.context_tokens / 1000.0 * self.price_per_1k, 6),
+        )
+
+
+def run_matrix(fixtures: Sequence[Fixture],
+               policies: Dict[str, MemoryPolicy],
+               faults: Optional[Faults] = None) -> List[RunResult]:
+    """三类 fixture × 三种记忆策略，各跑一遍（离线、确定性）。"""
+    results: List[RunResult] = []
+    for fixture in fixtures:
+        for name in sorted(policies):
+            policy = _fresh_policy(name, policies)
+            results.append(ResearchHarness(fixture, policy).run(faults))
+    return results
+
+
+def _fresh_policy(name: str, policies: Dict[str, MemoryPolicy]) -> MemoryPolicy:
+    """图状态策略要一个干净的引擎，避免上一条 fixture 的节点串味。"""
+    if name == "graph_state":
+        return type(policies[name])(
+            token_counter=getattr(policies[name], "count", count_words),
+        )
+    return type(policies[name])(token_counter=getattr(policies[name], "count", count_words))
