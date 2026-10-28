@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  buildIndex,
   cancelRun,
   getHealth,
+  getIndexStatus,
   getRun,
+  listDocuments,
   listRuns,
   subscribeEvents,
   submitAsync,
+  uploadDocument,
+  type DocumentMeta,
   type HealthResponse,
+  type IndexStatus,
   type ResearchResult,
   type RunSummary,
   type TraceEvent,
@@ -16,6 +22,7 @@ import { AnswerPanel } from "./components/AnswerPanel";
 import { EvidencePanel } from "./components/EvidencePanel";
 import { TraceTimeline } from "./components/TraceTimeline";
 import { RunHistory } from "./components/RunHistory";
+import { CorpusPanel } from "./components/CorpusPanel";
 
 export default function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -25,7 +32,20 @@ export default function App() {
   const [runId, setRunId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
+  const [documents, setDocuments] = useState<DocumentMeta[]>([]);
   const closeRef = useRef<(() => void) | null>(null);
+
+  const refreshCorpus = useCallback(async () => {
+    try {
+      const [status, docs] = await Promise.all([getIndexStatus(), listDocuments()]);
+      setIndexStatus(status);
+      setDocuments(docs);
+    } catch {
+      setIndexStatus(null);      // 后端没挂 ingest 时安静降级
+      setDocuments([]);
+    }
+  }, []);
 
   const refreshRuns = useCallback(async () => {
     try {
@@ -38,8 +58,9 @@ export default function App() {
   useEffect(() => {
     getHealth().then(setHealth).catch((e) => setError(String(e)));
     refreshRuns();
+    refreshCorpus();
     return () => closeRef.current?.();
-  }, [refreshRuns]);
+  }, [refreshCorpus, refreshRuns]);
 
   const openRun = useCallback(async (id: string) => {
     closeRef.current?.();
@@ -121,6 +142,23 @@ export default function App() {
         <div className="col">
           <TraceTimeline events={events} />
           <RunHistory runs={runs} onOpen={openRun} onRefresh={refreshRuns} />
+          <CorpusPanel
+            status={indexStatus}
+            documents={documents}
+            onUpload={async (payload) => {
+              const saved = await uploadDocument(payload);
+              await refreshCorpus();
+              return saved.duplicate
+                ? `已存在同一文档（${saved.meta.doc_id}），未重复写入`
+                : `已上传 ${saved.meta.name}（${saved.meta.doc_id}）`;
+            }}
+            onBuild={async () => {
+              const version = await buildIndex();
+              await refreshCorpus();
+              const stages = (version.stages ?? []).map((s) => `${s.name}:${s.status}`).join(" · ");
+              return `构建 ${version.version}：${version.n_chunks} 块（${stages}）`;
+            }}
+          />
         </div>
       </div>
     </main>

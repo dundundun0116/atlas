@@ -183,10 +183,148 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Documents */
+        get: operations["list_documents_documents_get"];
+        put?: never;
+        /** Upload */
+        post: operations["upload_documents_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/index/build": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Build */
+        post: operations["build_index_build_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/index/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Versions */
+        get: operations["versions_index_versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/index/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status */
+        get: operations["status_index_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** BuildRequest */
+        BuildRequest: {
+            /**
+             * Dense
+             * @default false
+             */
+            dense: boolean;
+            /**
+             * Entity Graph
+             * @default false
+             */
+            entity_graph: boolean;
+        };
+        /** BuildStage */
+        BuildStage: {
+            /** Name */
+            name: string;
+            /**
+             * Status
+             * @default pending
+             */
+            status: string;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * Elapsed Ms
+             * @default 0
+             */
+            elapsed_ms: number;
+        };
+        /** DocumentIn */
+        DocumentIn: {
+            /** Name */
+            name: string;
+            /** Content */
+            content: string;
+            /**
+             * Format
+             * @default txt
+             */
+            format: string;
+        };
+        /** DocumentMeta */
+        DocumentMeta: {
+            /** Doc Id */
+            doc_id: string;
+            /** Name */
+            name: string;
+            /** Format */
+            format: string;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Size */
+            size: number;
+            /** Created At */
+            created_at: number;
+        };
+        /** DocumentUploadResult */
+        DocumentUploadResult: {
+            meta: components["schemas"]["DocumentMeta"];
+            /**
+             * Duplicate
+             * @default false
+             */
+            duplicate: boolean;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -232,6 +370,68 @@ export interface components {
              * @default 0.1.0
              */
             version: string;
+        };
+        /** IndexStatus */
+        IndexStatus: {
+            /**
+             * Runtime Version
+             * @default
+             */
+            runtime_version: string;
+            /**
+             * Built Version
+             * @default
+             */
+            built_version: string;
+            /**
+             * Mismatch
+             * @default false
+             */
+            mismatch: boolean;
+            /**
+             * N Documents
+             * @default 0
+             */
+            n_documents: number;
+            /**
+             * N Chunks
+             * @default 0
+             */
+            n_chunks: number;
+            /**
+             * N Versions
+             * @default 0
+             */
+            n_versions: number;
+            /**
+             * Last Error
+             * @default
+             */
+            last_error: string;
+        };
+        /** IndexVersion */
+        IndexVersion: {
+            /** Version */
+            version: string;
+            /** Created At */
+            created_at: number;
+            /**
+             * N Documents
+             * @default 0
+             */
+            n_documents: number;
+            /**
+             * N Chunks
+             * @default 0
+             */
+            n_chunks: number;
+            /** Stages */
+            stages?: components["schemas"]["BuildStage"][];
+            /**
+             * Error
+             * @default
+             */
+            error: string;
         };
         /**
          * ResearchEvidence
@@ -849,6 +1049,132 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_documents_documents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentMeta"][];
+                };
+            };
+        };
+    };
+    upload_documents_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DocumentIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentUploadResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    build_index_build_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["BuildRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IndexVersion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    versions_index_versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IndexVersion"][];
+                };
+            };
+        };
+    };
+    status_index_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IndexStatus"];
                 };
             };
         };

@@ -11,6 +11,10 @@ export type RunSummary = components["schemas"]["RunSummary"];
 export type TraceEvent = components["schemas"]["TraceEvent"];
 export type RunEnvelope = components["schemas"]["RunEnvelope"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
+export type IndexStatus = components["schemas"]["IndexStatus"];
+export type IndexVersion = components["schemas"]["IndexVersion"];
+export type DocumentMeta = components["schemas"]["DocumentMeta"];
+export type DocumentUploadResult = components["schemas"]["DocumentUploadResult"];
 
 const BASE = "";
 
@@ -52,6 +56,36 @@ export async function getRun(runId: string): Promise<RunEnvelope> {
 
 export async function listRuns(limit = 30): Promise<RunSummary[]> {
   return json<RunSummary[]>(await fetch(`${BASE}/runs?limit=${limit}`));
+}
+
+export async function getIndexStatus(): Promise<IndexStatus> {
+  return json<IndexStatus>(await fetch(`${BASE}/index/status`));
+}
+
+export async function listDocuments(): Promise<DocumentMeta[]> {
+  return json<DocumentMeta[]>(await fetch(`${BASE}/documents`));
+}
+
+export async function uploadDocument(payload: {
+  name: string;
+  content: string;
+  format: string;
+}): Promise<DocumentUploadResult> {
+  const res = await fetch(`${BASE}/documents`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return json<DocumentUploadResult>(res);
+}
+
+export async function buildIndex(dense = false): Promise<IndexVersion> {
+  const res = await fetch(`${BASE}/index/build`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ dense }),
+  });
+  return json<IndexVersion>(res);
 }
 
 export async function cancelRun(runId: string): Promise<{ cancelled: boolean; status: string }> {

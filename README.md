@@ -113,7 +113,11 @@ npm test             # 组件测试
 npm run build
 ```
 
-界面包含四块：提问与预算配置、答案（置信度/停止原因/拒答）、证据（来源/检索器/排名/引用片段）、过程时间线（SSE 实时推送 `plan → retrieve → verify → answer → finish`）与历史运行（打开既有 trace，**不重新调用模型**）。
+语料与索引（Task 4）：`POST /documents` 上传 txt/md/json（指纹去重），`POST /index/build` 生成新版本，
+`GET /index/status` 同时给 `runtime_version`（服务启动时装的）与 `built_version`（最新构建）——
+两者不一致会显式告警，因为那意味着"你看到的数字和跑出来的不是同一版索引"。
+
+界面包含五块：提问与预算配置、答案（置信度/停止原因/拒答）、证据（来源/检索器/排名/引用片段）、过程时间线（SSE 实时推送 `plan → retrieve → verify → answer → finish`）与历史运行（打开既有 trace，**不重新调用模型**）。
 异步运行用 `POST /research/async` 拿 `run_id`，再订阅 `GET /runs/{id}/events`；`POST /runs/{id}/cancel` 可取消，取消后不再发起新的模型或检索调用。
 
 ## 项目结构

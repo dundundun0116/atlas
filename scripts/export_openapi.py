@@ -7,6 +7,7 @@
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +34,8 @@ class _StubLLM:
 
 def main() -> int:
     app = create_app(Agent(_StubLLM(), {"stub": _StubTool()}, {},
-                           AgentConfig(use_dense=False)))
+                           AgentConfig(use_dense=False)),
+                     ingest_root=Path(tempfile.mkdtemp(prefix="openapi-ingest-")))
     out = REPO_ROOT / "web" / "openapi.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(app.openapi(), ensure_ascii=False, indent=2), encoding="utf-8")
