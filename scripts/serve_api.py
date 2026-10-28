@@ -63,6 +63,10 @@ def main():
     ap.add_argument("--embeddings-dir", default=REPO_ROOT / "data" / "cache" / "embeddings")
     ap.add_argument("--wiki-dir", default=REPO_ROOT / "data" / "cache" / "wiki")
     ap.add_argument("--kg-dir", default=REPO_ROOT / "data" / "cache" / "kg")
+    ap.add_argument("--ingest-root", default=REPO_ROOT / "runs" / "ingest",
+                    help="文档/索引版本目录（Task 4）")
+    ap.add_argument("--runtime-index-version", default="",
+                    help="服务启动时装载的索引版本标识（写进 RunRecord 与 /index/status）")
     ap.add_argument("--check", action="store_true",
                     help="只装配并打印 /health 的索引信息后退出（不监听端口、不调模型）")
     args = ap.parse_args()
@@ -90,7 +94,8 @@ def main():
                                       embedder=embedder)
 
     agent = Agent(LLMClient(), tools, store, agent_cfg)
-    app = create_app(agent, trace_dir=args.trace_dir)
+    app = create_app(agent, trace_dir=args.trace_dir, ingest_root=args.ingest_root,
+                     runtime_index_version=args.runtime_index_version)
     if args.check:
         from fastapi.testclient import TestClient
         body = TestClient(app).get("/health").json()

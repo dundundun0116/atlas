@@ -174,12 +174,24 @@
 - 已知缺口：异步模式尚未强制执行 `timeout_s`（同步模式有）；`web/` 前端未开始；**前端工具链可用**（node v24.12 / npm 11.6）。
 - 下一步：Task 3 前端工作台（Vite + React + TS），或先补 Task 2 的异步超时。
 
+## 2026-10-28 全栈计划 Task 3 完成 + 浏览器端到端验证
+
+- **前端工作台交付**（`web/`，Vite + React + TS，commit `e35012d` 起）：提问/预算、答案（置信度/停止原因/拒答）、证据（来源/检索器/排名/引用）、过程时间线（SSE 实时 + 历史回放）、历史运行（打开既有 trace 不重跑模型）。类型全部由 `scripts/export_openapi.py` + `openapi-typescript` 生成（`web/src/api/types.ts`），组件不复制后端 schema。9 条组件测试 + `tsc --noEmit` + `vite build` 通过。
+- **后端配套**：`/research/async`（202 + RunSummary）、`/research/sync`（ResearchResult）、`/runs/{id}/events/json`、运行记录保存结构化 `result`（GET /runs/{id} 直接回读）、异步 `timeout_s` 强制（超时 → failed/failure=timeout）。
+- **真实浏览器 E2E（1280×800）**：起真实后端（bm25/dense/kg，4646 块）+ Vite，跑两条路径——
+  - 决策多轮：5 条证据（含 kg 命中）、7 步时间线、3253 token；
+  - direct：`What is the capital of France?` → **Paris**、417 token。
+- **E2E 暴露并修掉三个真问题**（commit `040242e`）：① direct 路由错用"只准用证据"提示词，把常识题逼成 unknown → 新增 `DIRECT_ANSWER_PROMPT`；② direct 无证据时置信度 0 会被读成失败 → 给中性 0.5；③ SSE 时间线把生命周期 finish 与 finish 节点各渲染一次 → 只保留带 `step_id` 的轨迹步骤。
+- 测试：后端 **244 passed**，前端 **9 passed**，`npm run build` 通过；工作区干净。
+- 下一步：Task 4（文档/语料管理闭环：上传、后台构建、索引版本固定）、Task 5（docker-compose + 架构文档）、Task 6（评测报告与 resume 证据）。
+
 
 ## 变更登记（插件自动维护）
 
 > 这张表由插件**自动**维护：每次写台账 / 归档追加一行，只留最近 12 条（条数可在设置里调，项目清单里的 `changeRegisterMax` 优先）。
 > 完整历史在活动日志的 `L0-ledger-changes.md`（用 `ledger_log({view:"audit"})` 查）。
 
+- 2026-10-28 20:59:06 (append) [486c] +11 行 → 186 行 · revision→41
 - 2026-10-28 20:46:04 (append) [486c] +12 行 → 175 行 · revision→40
 - 2026-10-28 19:53:27 (append) [486c] +13 行 → 163 行 · revision→39
 - 2026-10-28 16:39:52 (append) [486c] +7 行 → 150 行 · revision→38
@@ -191,4 +203,3 @@
 - 2026-10-28 13:29:41 (append) [486c] +11 行 → 106 行 · revision→32
 - 2026-10-28 13:29:18 (append) [486c] +14 行 → 95 行 · revision→31
 - 2026-10-28 13:28:44 (append) [486c] +8 行 → 81 行 · revision→30
-- 2026-10-28 13:28:02 (append) [486c] +7 行 → 73 行 · revision→29

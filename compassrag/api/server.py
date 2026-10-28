@@ -16,13 +16,17 @@ from fastapi import FastAPI
 from ..agent.core import Agent
 from ..agent.schemas import ResearchResult
 from .events import EventPublisher, RunRegistry
+from .ingest import IngestStore
+from .ingest_routes import build_ingest_router
 from .routes import build_router
 from .schemas import ErrorBody  # noqa: F401 - 供 OpenAPI 文档引用
 from .store import TraceStore
 
 
 def create_app(agent: Agent, *, trace_dir: str | Path | None = None,
-               cache: dict[str, ResearchResult] | None = None) -> FastAPI:
+               cache: dict[str, ResearchResult] | None = None,
+               ingest_root: str | Path | None = None,
+               runtime_index_version: str = "") -> FastAPI:
     store = TraceStore(trace_dir)
     registry, publisher = RunRegistry(), EventPublisher()
     app = FastAPI(title="CompassRAG ResearchTool", version="0.1.0",
@@ -33,6 +37,10 @@ def create_app(agent: Agent, *, trace_dir: str | Path | None = None,
     app.state.publisher = publisher
     app.include_router(build_router(agent, store=store, cache=cache,
                                     registry=registry, publisher=publisher))
+    if ingest_root is not None:
+        app.state.ingest = IngestStore(ingest_root)
+        app.include_router(build_ingest_router(app.state.ingest,
+                                               runtime_version=runtime_index_version))
     return app
 
 
