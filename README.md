@@ -95,6 +95,16 @@ python scripts/serve_api.py --port 8000    # POST /research · GET /runs/{trace_
 
 复现实验小贴士：所有批量脚本都带**断点续跑**（按 id / 块 id 增量落盘，中断后原命令重跑即可）；`--variant samples` 表示"抽样题小库"，不带则用全量 dev 语料库；`configs/ablation/` 每个文件就是一个消融级别。
 
+## 评测
+
+口径、五组配置、指标定义与复现命令见 [docs/evaluation.md](docs/evaluation.md)。
+正式评测固定题集/索引/模型/预算并跑 ≥2 次重复，汇总在 `runs/eval/summary.json`。
+
+```bash
+python scripts/run_resume_eval.py --repeats 2 --parallel 3 --strict-answer-words 5
+python scripts/report_runs.py
+```
+
 ## 一条命令起演示
 
 ```bash

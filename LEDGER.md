@@ -193,12 +193,23 @@
 - 测试：后端 **250 passed**（新增 ingest 6 条），前端 **11 passed**，`vite build` 通过。
 - 仍未做：Task 5（docker-compose + `docs/fullstack-architecture.md` + 一条命令启动）、Task 6（`docs/evaluation.md` 与 resume 证据）；Playwright 未固化（当前为组件测试 + 手工 E2E）。
 
+## 2026-10-28 全栈计划 Task 5 完成（一条命令启动 + 容器化 + E2E）
+
+- **一条命令**：`scripts/demo.sh`（本地，不依赖 docker）——起后端 + 前端，就绪探测后打印地址，Ctrl-C 一起退出；`--ingest` 切到上传文档索引。实测 `api=200 / web=200`。
+- **容器化**：`Dockerfile`（python:3.12-slim + `.[api]` + healthcheck）、`web/Dockerfile`（vite build → nginx，SSE 关 `proxy_buffering`）、`docker-compose.yml`（前后端 + `data/`、`runs/` 挂载 + 健康检查 + 模型/密钥只从环境变量注入）。**注意：本机 docker daemon 未启动**，只做了 `docker compose config` 校验，镜像未实际构建。
+- **架构文档**：`docs/fullstack-architecture.md`（组件/端口、同步与异步两条路径、状态机与失败语义、索引版本固定、可复现性、四条已知边界）；README 增加「一条命令起演示」。
+- **运行时版本接线**：`serve_api.py --index-source ingest` 装载最新构建版本（仅 BM25），版本写进 `RunRecord.index_version`；同步运行现在也会建 RunRecord（历史可见），`RunSummary` 增加 `index_version`。
+- **E2E 测试**（`tests/test_e2e_ingest_flow.py`，零 API 费用）：上传 → 构建 → 装载该版本 → 提问 → 证据必须来自上传文档 → 运行固定同一版本；重建索引后 `mismatch=true` 且运行时版本不变。
+- 测试：后端 **252 passed**，前端 **11 passed**；commit `85db95f`；工作区干净。
+- 剩余：**Task 6**（`docs/evaluation.md` + `scripts/run_resume_eval.py`：固定数据集/种子/模型/预算/索引版本，五组配置，两次重复，指标可回 trace）。另：Playwright 未固化；docker 镜像未实机构建。
+
 
 ## 变更登记（插件自动维护）
 
 > 这张表由插件**自动**维护：每次写台账 / 归档追加一行，只留最近 12 条（条数可在设置里调，项目清单里的 `changeRegisterMax` 优先）。
 > 完整历史在活动日志的 `L0-ledger-changes.md`（用 `ledger_log({view:"audit"})` 查）。
 
+- 2026-10-28 21:22:22 (append) [486c] +10 行 → 204 行 · revision→43
 - 2026-10-28 21:16:09 (append) [486c] +8 行 → 194 行 · revision→42
 - 2026-10-28 20:59:06 (append) [486c] +11 行 → 186 行 · revision→41
 - 2026-10-28 20:46:04 (append) [486c] +12 行 → 175 行 · revision→40
@@ -210,4 +221,3 @@
 - 2026-10-28 16:30:08 (append) [486c] +11 行 → 123 行 · revision→34
 - 2026-10-28 13:30:01 (append) [486c] +6 行 → 112 行 · revision→33
 - 2026-10-28 13:29:41 (append) [486c] +11 行 → 106 行 · revision→32
-- 2026-10-28 13:29:18 (append) [486c] +14 行 → 95 行 · revision→31

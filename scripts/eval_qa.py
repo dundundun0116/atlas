@@ -56,6 +56,8 @@ def main():
                     help="本题 token 上限（0=不限）；同预算对照实验用它")
     ap.add_argument("--max-latency-ms", type=float, default=0.0,
                     help="本题墙钟上限（0=不限）")
+    ap.add_argument("--strict-answer-words", type=int, default=0,
+                    help=">0 时把答案约束成 N 词以内（答案格式实验结论，见 decisions/D11）")
     ap.add_argument("--no-graph", dest="use_graph", action="store_false",
                     help="退回顺序实现（默认走 LangGraph runner；复现历史行时用）")
     ap.set_defaults(use_graph=True)
@@ -68,6 +70,8 @@ def main():
     if args.max_latency_ms:
         agent_cfg.max_latency_ms = args.max_latency_ms
     agent_cfg.use_graph = args.use_graph
+    if args.strict_answer_words:
+        agent_cfg.strict_answer_words = args.strict_answer_words
     if agent_cfg.use_wiki and not agent_cfg.use_dense:
         raise SystemExit("use_wiki 依赖稠密向量通路（条目层/源块排序）——请同时开启 use_dense")
     if agent_cfg.use_kg and not agent_cfg.use_dense:
