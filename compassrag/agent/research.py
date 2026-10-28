@@ -133,6 +133,9 @@ def research(agent: Agent, request: ResearchRequest, *,
              cache: dict[str, ResearchResult] | None = None,
              on_trace=None,
              use_graph: bool = True,
+             run_id: str = "",
+             on_event=None,
+             cancel_check=None,
              ) -> ResearchResult:
     """本地 adapter：按请求预算跑一次，返回对外契约。
 
@@ -149,7 +152,9 @@ def research(agent: Agent, request: ResearchRequest, *,
     )
     runner = Agent(agent.llm, agent.tools, agent.store, cfg)
     # 阶段 C：对外调用统一走 graph runner；`use_graph=False` 只留给对照/回退
-    result = GraphRunner(runner).run(request.query) if use_graph else runner.answer(request.query)
+    run_kwargs = {"run_id": run_id, "on_event": on_event, "cancel_check": cancel_check}
+    result = (GraphRunner(runner).run(request.query, **run_kwargs) if use_graph
+              else runner.answer(request.query, **run_kwargs))
     if on_trace is not None and result.trace is not None:
         on_trace(result.trace)
     out = to_research_result(result, store=agent.store)

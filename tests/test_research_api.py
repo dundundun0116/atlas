@@ -200,3 +200,116 @@ def test_health_reports_index_version_and_size():
     assert body["index"]["bm25"]["ok"] is True
     assert body["index"]["bm25"]["size"] == 2
     assert ":" in body["index"]["bm25"]["version"]
+
+
+# --------------------------------------------------------------------------- #
+# Task 2：异步运行、SSE 事件流、取消
+# --------------------------------------------------------------------------- #
+
+
+def _wait_terminal(client, run_id, timeout=10.0):
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        body = client.get(f"/runs/{run_id}").json()
+        if body["summary"] and body["summary"]["status"] in ("completed", "failed", "cancelled"):
+            return body["summary"]
+        time.sleep(0.05)
+    raise AssertionError(f"run {run_id} 没有在 {timeout}s 内进入终态")
+
+
+def test_async_run_reaches_completed_with_summary_and_trace():
+    client, _ = _client()
+    submitted = client.post("/research", json={"query": "Who is Alpha?", "async_mode": True})
+    assert submitted.status_code == 200
+    run_id = submitted.json()["run_id"]
+    assert submitted.json()["status"] in ("queued", "running")
+
+    summary = _wait_terminal(client, run_id)
+    assert summary["status"] == "completed"
+    assert summary["answer"] == "Paris" and summary["stop_reason"] == "answered"
+    assert summary["trace_id"] and summary["n_events"] > 0
+
+    detail = client.get(f"/runs/{run_id}").json()
+    assert detail["summary"]["run_id"] == run_id
+    assert detail["trace"]["run_id"] == summary["trace_id"]
+
+
+def test_sse_stream_emits_ordered_events_and_ends():
+    client, _ = _client()
+    run_id = client.post("/research", json={"query": "Who is Alpha?", "async_mode": True}).json()["run_id"]
+    _wait_terminal(client, run_id)
+
+    kinds = []
+    with client.stream("GET", f"/runs/{run_id}/events") as resp:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        for line in resp.iter_lines():
+            if line.startswith("event:"):
+                kinds.append(line.split(":", 1)[1].strip())
+    assert "status" in kinds
+    for expected in ("retrieve", "answer", "finish", "end"):
+        assert expected in kinds, f"缺少事件 {expected}: {kinds}"
+    # 顺序：retrieve 在 answer 之前，answer 在 finish 之前
+    assert kinds.index("retrieve") < kinds.index("answer") < kinds.index("finish")
+
+
+def test_cancel_marks_run_cancelled_and_stops_new_calls():
+    import time
+    slow = SlowTool()                 # 每次检索 sleep 0.3s
+    client, agent = _client(tools={"bm25": slow})
+    run_id = client.post("/research", json={"query": "q", "async_mode": True}).json()["run_id"]
+    time.sleep(0.05)
+    resp = client.post(f"/runs/{run_id}/cancel")
+    assert resp.status_code == 200 and resp.json()["cancelled"] is True
+    summary = _wait_terminal(client, run_id, timeout=15)
+    assert summary["status"] == "cancelled"
+    assert summary["cancelled"] is True
+    # 取消后不再发起新的模型调用
+    assert agent.llm.calls <= 2
+
+
+def test_list_runs_and_unknown_run_404():
+    client, _ = _client()
+    run_id = client.post("/research", json={"query": "q", "async_mode": True}).json()["run_id"]
+    _wait_terminal(client, run_id)
+    listed = client.get("/runs?limit=10").json()
+    assert any(r["run_id"] == run_id for r in listed)
+    assert client.get("/runs/nope/events").status_code == 404
+    assert client.post("/runs/nope/cancel").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Task 1：会话分组与事件字段完整度
+# --------------------------------------------------------------------------- #
+
+
+def test_session_groups_runs_and_404_for_unknown():
+    client, _ = _client()
+    run_id = client.post("/research", json={"query": "q", "async_mode": True,
+                                            "session_id": "s-1", "subtask_id": "S3"}).json()["run_id"]
+    _wait_terminal(client, run_id)
+    session = client.get("/sessions/s-1").json()
+    assert session["session_id"] == "s-1"
+    assert [r["run_id"] for r in session["runs"]] == [run_id]
+    assert session["runs"][0]["subtask_id"] == "S3"
+    assert client.get("/sessions/nope").status_code == 404
+
+
+def test_events_carry_latency_tool_and_outcome():
+    client, _ = _client()
+    run_id = client.post("/research", json={"query": "q", "async_mode": True}).json()["run_id"]
+    _wait_terminal(client, run_id)
+    events = []
+    with client.stream("GET", f"/runs/{run_id}/events") as resp:
+        for line in resp.iter_lines():
+            if line.startswith("data:"):
+                import json as _json
+                events.append(_json.loads(line.split(":", 1)[1]))
+    retrieve = [e for e in events if e["kind"] == "retrieve"]
+    assert retrieve, "没有检索事件"
+    payload = retrieve[0]["payload"]
+    for key in ("step_id", "latency_ms", "outcome", "tokens", "evidence"):
+        assert key in payload, f"事件缺字段 {key}: {payload.keys()}"
+    assert payload["tool"] == "bm25"
+    assert payload["outcome"] == "ok"

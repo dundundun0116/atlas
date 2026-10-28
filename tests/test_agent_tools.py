@@ -174,7 +174,7 @@ def test_trace_records_query_sources_and_answer_step():
     result = agent.answer("q")
     trace = result.trace
     assert [q.source.value for q in trace.queries] == ["original"]
-    assert [s.kind for s in trace.steps] == ["retrieve", "answer"]
+    assert [s.kind for s in trace.steps] == ["retrieve", "answer", "finish"]
     assert trace.evidence_titles == ["Alpha"]
     assert trace.n_answer_calls == 1 and trace.n_llm_calls == 1
 

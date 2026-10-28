@@ -149,12 +149,26 @@
 - 恢复路径写在 `LEDGER.md` 的「待批花费」与最新交接单里：用户回一句「重跑六配置」或「先跑 C 臂」即可解除。
 - 本轮新增并提交：`tests/test_readme_consistency.py`（README 表 ↔ runs 复算逐列比对，6 条；无 runs 环境自动跳过），提交 `ba761d9`。
 
+## 2026-10-28 收口（用户决定「就这样」）
+
+- 用户决定**停在可交付状态**，剩余四项付费实验（六配置重跑 280 万 / C 臂 100 万 / 同预算 20–30 万 / 三基准 300 万+）**不再启动**。goal 保持 blocked，不再自动续跑。
+- 终态：**234 passed**，HEAD `9a37673`，`git status` 干净（0 项）。
+- 交付清单（都可在库内直接查到）：
+  - 代码：`compassrag/agent/{schemas,tools,state,core,graph,research}.py`、`diagnose/{verifier,repair}.py`、`api/`、`adapters/atlas.py`、`eval/{traces,manifest,report,arms}.py`
+  - 脚本：`eval_qa`（含 `--no-graph` / 预算开关 / manifest）、`report_runs`、`check_benchmarks`、`serve_api --check`、`compare_arms`
+  - 文档：README（双口径表 + H1 结论）、`docs/STATUS.md`（A–E 证据链 + 四条边界）、`docs/failure-cases.md`（四案例）、`docs/interview-qa.md`（十问答）、`docs/experiment-answer-format.md`（预注册 + 结果）
+  - 记忆：`decisions/D1–D11`、`lessons/L1–L6 · E1–E3`、三份交接单
+  - 数据（未入库，保留在本地 `runs/`）：六配置 50 题结果 + 300 条轨迹 + B 臂结果
+- **未完成且明确记录在文档里**：六配置表仍是旧措辞口径（严格 EM 偏低约 0.14）；三基准与同预算对照未跑；plan accuracy 只有弱代理。
+- 恢复方式：回一句「重跑六配置」或「先跑 C 臂」，按 `decisions/D11` 与最新交接单执行即可。
+
 
 ## 变更登记（插件自动维护）
 
 > 这张表由插件**自动**维护：每次写台账 / 归档追加一行，只留最近 12 条（条数可在设置里调，项目清单里的 `changeRegisterMax` 优先）。
 > 完整历史在活动日志的 `L0-ledger-changes.md`（用 `ledger_log({view:"audit"})` 查）。
 
+- 2026-10-28 19:53:27 (append) [486c] +13 行 → 163 行 · revision→39
 - 2026-10-28 16:39:52 (append) [486c] +7 行 → 150 行 · revision→38
 - 2026-10-28 16:38:00 (append) [486c] +7 行 → 143 行 · revision→37
 - 2026-10-28 16:34:52 (append) [486c] +7 行 → 136 行 · revision→36
@@ -166,4 +180,3 @@
 - 2026-10-28 13:28:44 (append) [486c] +8 行 → 81 行 · revision→30
 - 2026-10-28 13:28:02 (append) [486c] +7 行 → 73 行 · revision→29
 - 2026-10-28 13:26:08 (replace) [486c] -176 行 → 66 行 · revision→28
-- 2026-10-28 13:25:43 (append) [486c] +8 行 → 242 行 · revision→27

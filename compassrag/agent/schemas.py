@@ -56,6 +56,7 @@ class StopReason(str, Enum):
     TOOL_FAILURE = "tool_failure"        # 工具连续报错，无法继续
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"  # 证据不支持结论且修复已用尽 → 拒答
     ERROR = "error"                      # 未预期异常（评测需要把这类题单独计数）
+    CANCELLED = "cancelled"              # 客户端主动取消（不再发起新的模型/检索调用）
 
     @property
     def is_budget(self) -> bool:
@@ -251,7 +252,7 @@ class TraceStep(BaseModel):
 
     step_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:8])
     parent_step_id: str = ""
-    kind: Literal["plan", "retrieve", "verify", "answer"]
+    kind: Literal["plan", "retrieve", "verify", "repair", "answer", "finish"]
     tag: str = ""                      # llm 调用标签（plan / sufficiency / answer …）
     detail: dict[str, Any] = Field(default_factory=dict)
     latency_ms: float = 0.0
@@ -292,7 +293,7 @@ class ResearchRequest(BaseModel):
 
 # 对外失败分类：Atlas 据此决定重试/暂停/改子任务（与内部 StopReason 是两套词表）
 FailureCategory = Literal["", "timeout", "budget_exhausted", "no_evidence",
-                          "upstream_error", "invalid_request"]
+                          "upstream_error", "invalid_request", "cancelled"]
 
 
 class ResearchResult(BaseModel):

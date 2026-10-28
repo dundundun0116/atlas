@@ -92,6 +92,8 @@ class GraphRunner:
 
     def _plan(self, gs: GraphState) -> dict[str, Any]:
         agent, st = self.agent, gs["st"]
+        if st.check_cancel():
+            return {"stop": StopReason.CANCELLED.value, "pending": []}
         if agent.config.use_decision:
             decision = agent._plan(st)
             if decision.route is Route.DIRECT:
@@ -132,6 +134,8 @@ class GraphRunner:
 
     def _retrieve_one(self, gs: GraphState) -> dict[str, Any]:
         agent, st = self.agent, gs["st"]
+        if st.check_cancel():
+            return {"stop": StopReason.CANCELLED.value, "pending": []}
         item, rest = gs["pending"][0], gs["pending"][1:]
         st.record_query(item["query"], QuerySource(item["source"]))
         new = agent._retrieve_and_collect(st, item["query"], QuerySource(item["source"]))
@@ -146,7 +150,7 @@ class GraphRunner:
             st.add_llm_call(resp)
         result = EvidenceCheck(sufficient=check.ok, next_query=check.next_query,
                                parsed=check.parsed)
-        st.trace.step("verify", tag="sufficiency", detail={
+        st.step("verify", tag="sufficiency", detail={
             "sufficient": result.sufficient, "next_query": result.next_query,
             "parsed": result.parsed,
         })
@@ -178,11 +182,15 @@ class GraphRunner:
 
     def _prep(self, gs: GraphState) -> dict[str, Any]:
         agent, st = self.agent, gs["st"]
+        if gs.get("stop") == StopReason.CANCELLED.value or st.check_cancel():
+            st.step("finish", tag="cancelled", detail={"reason": "client_cancelled"})
+            return {"stop": StopReason.CANCELLED.value, "answer": "",
+                    "calls": [], "refused": True}
         stop = StopReason(gs.get("stop") or StopReason.ANSWERED.value)
         stop = agent._finalize_stop(st, stop)
         st.truncate_evidence(agent.config.max_evidence)
         if agent.config.refuse_on_empty_evidence and not st.evidence:
-            st.trace.step("answer", detail={"refused": True, "reason": "no_evidence"})
+            st.step("answer", detail={"refused": True, "reason": "no_evidence"})
             st.trace.n_answer_calls = 0
             return {"stop": StopReason.EMPTY_EVIDENCE.value, "answer": "unknown",
                     "calls": [], "refused": True}
@@ -193,6 +201,9 @@ class GraphRunner:
 
     def _answer(self, gs: GraphState) -> dict[str, Any]:
         agent, st = self.agent, gs["st"]
+        if st.check_cancel():
+            return {"answer": "", "calls": [], "stop": StopReason.CANCELLED.value,
+                    "repaired": True, "refused": True}
         first = not gs.get("repaired")
         calls = agent._answer_with_evidence(st)
         for resp in calls:
@@ -257,6 +268,8 @@ class GraphRunner:
         decision = gs.get("decision")
         route = decision.route if decision is not None else Route.SINGLE
         stop = StopReason(gs.get("stop") or StopReason.ANSWERED.value)
+        st.step("finish", tag="finish", detail={"stop_reason": stop.value,
+                                                "answer_empty": not (gs.get("answer") or "").strip()})
         st.finish(answer=gs.get("answer", ""), stop_reason=stop, route=route)
         st.trace.evidence_titles = [agent.store[cid]["title"]
                                     for cid in st.evidence if cid in agent.store]
@@ -264,9 +277,12 @@ class GraphRunner:
 
     # -- 入口 -------------------------------------------------------------- #
 
-    def run(self, question: str) -> AgentResult:
+    def run(self, question: str, *, run_id: str = "", on_event=None,
+            cancel_check=None) -> AgentResult:
         agent = self.agent
-        st = AgentState(question, budget=agent.config.budget(), config=agent.config.snapshot())
+        st = AgentState(question, budget=agent.config.budget(),
+                        config=agent.config.snapshot(), run_id=run_id,
+                        on_event=on_event, cancel_check=cancel_check)
         gs: GraphState = {"st": st}
         final = self.graph.invoke(gs)
         st = final["st"]

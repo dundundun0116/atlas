@@ -14,7 +14,8 @@ LangGraph，节点读写的就是这个对象，框架负责跳转而不是状�
 from __future__ import annotations
 
 import time
-from typing import Any
+import uuid
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
@@ -57,11 +58,18 @@ class AgentState:
     """一题一次的运行状态；`trace` 是它的可落盘投影。"""
 
     def __init__(self, question: str, *, budget: Budget | None = None,
-                 config: dict[str, Any] | None = None) -> None:
+                 config: dict[str, Any] | None = None, run_id: str = "",
+                 on_event: Callable[[dict], None] | None = None,
+                 cancel_check: Callable[[], bool] | None = None) -> None:
         self.question = question
         self.budget = budget or Budget()
         self.started_at = time.perf_counter()
-        self.trace = AnswerTrace(question=question, config=dict(config or {}))
+        self.trace = AnswerTrace(question=question, config=dict(config or {}),
+                                 run_id=run_id or uuid.uuid4().hex[:12])
+        self.on_event = on_event            # 结构化事件出口（SSE / 日志）
+        self.cancel_check = cancel_check    # 协作式取消：每次节点入口检查
+        self.cancelled = False
+        self._last_step_ts = time.time()
         self.evidence: list[str] = []
         self.seen: set[str] = set()
         self.rounds = 0
@@ -115,6 +123,49 @@ class AgentState:
         self.usage.add(resp)
         self.trace.usage = self.usage
         self.trace.n_llm_calls += 1
+
+    # -- 事件 / 取消 --------------------------------------------------------- #
+
+    def step(self, kind: str, **kw: Any):
+        """登记一个轨迹步骤，同时把结构化事件推给订阅者。
+
+        事件是**从既有轨迹派生**的，不额外发明状态：`AnswerTrace` 仍是唯一真源，
+        SSE 只是它的实时投影。
+        """
+        step = self.trace.step(kind, **kw)
+        now = time.time()
+        latency_ms = round((now - self._last_step_ts) * 1000.0, 1)
+        self._last_step_ts = now
+        if self.on_event is not None:
+            detail = step.detail or {}
+            tools = detail.get("tools")
+            if isinstance(tools, list):
+                tool = ",".join(str(t.get("tool", t)) if isinstance(t, dict) else str(t)
+                                for t in tools)
+            else:
+                tool = str(detail.get("tool", "") or "")
+            self.on_event({
+                "kind": kind,
+                "step_id": step.step_id,
+                "parent_step_id": step.parent_step_id,
+                "tag": step.tag,
+                "tool": tool,
+                "query_source": str(detail.get("source", "") or ""),
+                "outcome": "error" if detail.get("outcome") == "error" else "ok",
+                "detail": detail,
+                "round": self.rounds,
+                "evidence": len(self.evidence),
+                "tokens": self.usage.total,
+                "latency_ms": latency_ms,
+                "ts": round(now, 3),
+            })
+        return step
+
+    def check_cancel(self) -> bool:
+        """协作式取消：一旦置位就返回 True，调用方必须停止发起新调用。"""
+        if not self.cancelled and self.cancel_check is not None and self.cancel_check():
+            self.cancelled = True
+        return self.cancelled
 
     # -- 预算 / 收尾 --------------------------------------------------------- #
 

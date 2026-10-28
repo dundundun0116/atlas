@@ -143,23 +143,29 @@ class Agent:
     # 入口
     # ------------------------------------------------------------------ #
 
-    def answer(self, question: str) -> AgentResult:
+    def answer(self, question: str, *, run_id: str = "", on_event=None,
+               cancel_check=None) -> AgentResult:
         if self.config.use_graph:
             # 延迟导入：graph 依赖 core，模块级导入会成环
             from .graph import GraphRunner
-            return GraphRunner(self).run(question)
-        return self._answer_sequential(question)
+            return GraphRunner(self).run(question, run_id=run_id, on_event=on_event,
+                                         cancel_check=cancel_check)
+        return self._answer_sequential(question, run_id=run_id, on_event=on_event,
+                                       cancel_check=cancel_check)
 
-    def _answer_sequential(self, question: str) -> AgentResult:
-        state = AgentState(question, budget=self.config.budget(),
-                           config=self.config.snapshot())
+    def _answer_sequential(self, question: str, *, run_id: str = "", on_event=None,
+                           cancel_check=None) -> AgentResult:
+        state = self._new_state(question, run_id=run_id, on_event=on_event,
+                                cancel_check=cancel_check)
         route, stop = self._control_flow(state)
+        if state.check_cancel():
+            return self._finish_cancelled(state, route)
         stop = self._finalize_stop(state, stop)
         state.truncate_evidence(self.config.max_evidence)
 
         if self.config.refuse_on_empty_evidence and not state.evidence:
             # 没有证据就不该生成事实：这一题一次模型调用都不发
-            state.trace.step("answer", detail={"refused": True, "reason": "no_evidence"})
+            state.step("answer", detail={"refused": True, "reason": "no_evidence"})
             state.trace.n_answer_calls = 0
             calls: list = []
             text, stop = "unknown", StopReason.EMPTY_EVIDENCE
@@ -184,9 +190,28 @@ class Agent:
             trace=state.trace if self.config.capture_trace else None,
         )
 
-    def _new_state(self, question: str) -> AgentState:
-        """建一个空状态（测试与提示词构造用，不触发检索）。"""
-        return AgentState(question, budget=self.config.budget(), config=self.config.snapshot())
+    def _new_state(self, question: str, *, run_id: str = "", on_event=None,
+                   cancel_check=None) -> AgentState:
+        """建状态（含事件出口与取消钩子）。"""
+        return AgentState(question, budget=self.config.budget(), config=self.config.snapshot(),
+                          run_id=run_id, on_event=on_event, cancel_check=cancel_check)
+
+    def _finish_cancelled(self, state: AgentState, route: "Route") -> AgentResult:
+        """取消后不再发起任何模型/检索调用，直接以 cancelled 收尾。"""
+        state.step("finish", tag="cancelled", detail={"reason": "client_cancelled"})
+        state.finish(answer="", stop_reason=StopReason.CANCELLED, route=route)
+        state.trace.evidence_titles = [self.store[cid]["title"]
+                                       for cid in state.evidence if cid in self.store]
+        return AgentResult(
+            answer="", evidence=list(state.evidence), rounds=state.rounds,
+            prompt_tokens=state.usage.prompt_tokens,
+            completion_tokens=state.usage.completion_tokens,
+            finish_reasons=[], n_calls=state.trace.n_answer_calls,
+            queries=[q.query for q in state.trace.queries],
+            n_llm_calls=state.trace.n_llm_calls,
+            route=route.value, stop_reason=StopReason.CANCELLED.value,
+            trace=state.trace if self.config.capture_trace else None,
+        )
 
     def _control_flow(self, state: AgentState) -> tuple[Route, StopReason]:
         """plan / retrieve / verify 的控制流；scripted 与 decision 只差开关。"""
@@ -263,7 +288,7 @@ class Agent:
         result, calls = verify_answer(self.llm, state.question, answer, evidence)
         for resp in calls:
             state.add_llm_call(resp)
-        state.trace.step("verify", tag="verify", detail={
+        state.step("verify", tag="verify", detail={
             "claims": len(result.claims), "unsupported": result.unsupported,
             "source_conflict": result.source_conflict, "parsed": result.parsed,
         })
@@ -306,7 +331,7 @@ class Agent:
                                  subquestions=list(plan.subquestions),
                                  parsed=plan.parsed,
                                  fallback_reason=plan.fallback_reason)
-        state.trace.step("plan", tag="plan", detail={
+        state.step("plan", tag="plan", detail={
             "route": decision.route.value, "subquestions": list(decision.subquestions),
             "parsed": decision.parsed, "fallback_reason": decision.fallback_reason,
         })
@@ -358,7 +383,7 @@ class Agent:
                 state.add_llm_call(resp)
             evidence_check = EvidenceCheck(sufficient=check.ok, next_query=check.next_query,
                                            parsed=check.parsed)
-            state.trace.step("verify", tag="sufficiency", detail={
+            state.step("verify", tag="sufficiency", detail={
                 "sufficient": evidence_check.sufficient,
                 "next_query": evidence_check.next_query,
                 "parsed": evidence_check.parsed, "new_evidence": new,
@@ -395,7 +420,7 @@ class Agent:
         calls = self.registry.run_all(request, names=only)
         for call in calls:
             state.add_tool_call(call)
-        state.trace.step("retrieve", detail={
+        state.step("retrieve", detail={
             "query": query, "source": QuerySource(source).value,
             "tools": [{"tool": c.tool_name, "outcome": c.outcome, "hits": len(c.hits)}
                       for c in calls],
@@ -434,7 +459,7 @@ class Agent:
             resp = self.llm.chat(messages + [{"role": "user", "content": RETRY_NUDGE}],
                                  tag="answer_retry", max_tokens=int(budget))
             calls.append(resp)
-        state.trace.step("answer", tag="answer", detail={
+        state.step("answer", tag="answer", detail={
             "n_calls": len(calls),
             "finish_reasons": [c.finish_reason for c in calls],
             "empty": not calls[-1].text.strip(),

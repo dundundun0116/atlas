@@ -149,7 +149,7 @@ def test_graph_keeps_trace_off_framework_state():
     assert rb.trace is not None
     assert rb.trace.evidence_ids == rb.evidence
     assert rb.trace.stop_reason.value == rb.stop_reason
-    assert [s.kind for s in rb.trace.steps] == ["retrieve", "answer"]
+    assert [s.kind for s in rb.trace.steps] == ["retrieve", "answer", "finish"]
 
 
 # --------------------------------------------------------------------------- #
