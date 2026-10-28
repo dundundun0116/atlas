@@ -203,12 +203,22 @@
 - 测试：后端 **252 passed**，前端 **11 passed**；commit `85db95f`；工作区干净。
 - 剩余：**Task 6**（`docs/evaluation.md` + `scripts/run_resume_eval.py`：固定数据集/种子/模型/预算/索引版本，五组配置，两次重复，指标可回 trace）。另：Playwright 未固化；docker 镜像未实机构建。
 
+## 2026-10-28 全栈计划 Task 6：评测脚本就绪，正式跑数进行中
+
+- **新增**（commit `d1f6c85`）：`scripts/run_resume_eval.py`（五组配置 × N 次重复，`--parallel` 并发，逐次留 manifest 与 trace，汇总写 `runs/eval/summary.json` 含均值/标准差）；`eval_qa --strict-answer-words`（统一加词数约束，依据 `D11`）；`docs/evaluation.md`（固定条件、五组配置、四列指标、复现命令、五条口径纪律）；README 增加评测一节。
+- **正在跑**：`--repeats 2 --parallel 3 --strict-answer-words 5`，日志 `runs/logs/resume_eval.log`，产物 `runs/eval/r1|r2/`。
+  - r1 进度：naive 50/50 ✅、plus_kg 50/50 ✅、plus_rewrite 11/50、plus_decision 8/50、plus_verify 3/50（后两个是慢配置）。
+  - 用量节奏：约 40 万 token / 10 分钟；按当前配置估算全程 **约 400–500 万 token**（用户「直接做吧」授权继续）。
+- 跑完后要做：核对 naive 是否仍 ≈0.300 锚、生成 `summary.json`、把五组均值±标准差写进 `docs/evaluation.md` 与 README（注明口径），再用 `report_runs.py` 交叉核对。
+- 注意：`runs/eval/` 与 `runs/qa/` 是两套目录——前者是正式重复实验，后者是历史基线；不要混算。
+
 
 ## 变更登记（插件自动维护）
 
 > 这张表由插件**自动**维护：每次写台账 / 归档追加一行，只留最近 12 条（条数可在设置里调，项目清单里的 `changeRegisterMax` 优先）。
 > 完整历史在活动日志的 `L0-ledger-changes.md`（用 `ledger_log({view:"audit"})` 查）。
 
+- 2026-10-28 21:31:47 (append) [486c] +9 行 → 213 行 · revision→44
 - 2026-10-28 21:22:22 (append) [486c] +10 行 → 204 行 · revision→43
 - 2026-10-28 21:16:09 (append) [486c] +8 行 → 194 行 · revision→42
 - 2026-10-28 20:59:06 (append) [486c] +11 行 → 186 行 · revision→41
@@ -220,4 +230,3 @@
 - 2026-10-28 16:31:53 (append) [486c] +6 行 → 129 行 · revision→35
 - 2026-10-28 16:30:08 (append) [486c] +11 行 → 123 行 · revision→34
 - 2026-10-28 13:30:01 (append) [486c] +6 行 → 112 行 · revision→33
-- 2026-10-28 13:29:41 (append) [486c] +11 行 → 106 行 · revision→32

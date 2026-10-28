@@ -46,12 +46,13 @@ def _run_one(cfg: str, args, repeat_dir: Path) -> Path:
     return out
 
 
-def summarize_repeat(repeat_dir: Path, benchmark: str, configs) -> dict:
+def summarize_repeat(repeat_dir: Path, benchmark: str, configs, variant: str = "full_dev") -> dict:
     from compassrag.eval.report import load_rows, summarize
 
+    suffix = "" if variant == "full_dev" else f"__{variant}"
     out = {}
     for cfg in configs:
-        rows = load_rows(repeat_dir / f"{benchmark}__{cfg}.jsonl")
+        rows = load_rows(repeat_dir / f"{benchmark}__{cfg}{suffix}.jsonl")
         if not rows:
             continue
         s = summarize(rows)
@@ -135,7 +136,7 @@ def main() -> int:
         with ThreadPoolExecutor(max_workers=max(1, args.parallel)) as pool:
             list(pool.map(work, jobs))
 
-    per_repeat = [summarize_repeat(root / f"r{r}", args.benchmark, configs)
+    per_repeat = [summarize_repeat(root / f"r{r}", args.benchmark, configs, args.variant)
                   for r in range(1, args.repeats + 1)]
 
     summary = {"benchmark": args.benchmark, "variant": args.variant,
