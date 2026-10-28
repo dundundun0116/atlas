@@ -21,7 +21,7 @@ from atlas.context.assembler import ContextAssembler
 from atlas.context.carryover import CarryOverManager
 from atlas.context.extractor import LLMCarryOverExtractor
 from atlas.memory.engine import GraphMemoryEngine
-from atlas.memory.schema import NodeStatus
+from atlas.memory.schema import NodeStatus, NodeType
 
 DEFAULT_BUDGET_TOKENS = 8000  # 上下文组装总预算
 _SUBTASK_CONTENT_LIMIT = 1000
@@ -200,3 +200,118 @@ class AtlasMemorySystem:
             self.engine.save_jsonl(self.dump_path)
         except Exception as e:
             self.dump_errors.append(f"{type(e).__name__}: {e}")
+
+
+class ServiceRuntime:
+    """阶段 4 的服务化外壳：会话 + 幂等写入 + checkpoint / 恢复。
+
+    与 `AtlasMemorySystem` 的分工：后者是 MemoryArena 的 memory-system 适配器（每子任务
+    结转、四区组装）；这里只管「状态怎么落库、怎么恢复」，不碰评测协议。
+
+    用法：
+        runtime = ServiceRuntime(repository, "s1", goal="规划杭州 3 日行")
+        runtime.note("planner", "路线：订票 → 订酒店", kind="decision", reason="先远后近")
+        runtime.checkpoint(pending_role="auditor", task_state="auditing")
+        # 进程重启后
+        runtime = ServiceRuntime(repository, "s1")
+        state = runtime.resume()      # 图与 checkpoint 一起回来
+    """
+
+    _KINDS = {
+        "goal": NodeType.GOAL,
+        "subtask": NodeType.SUBTASK,
+        "constraint": NodeType.CONSTRAINT,
+        "decision": NodeType.DECISION,
+        "artifact": NodeType.ARTIFACT,
+        "fact": NodeType.FACT,
+    }
+
+    def __init__(self, repository, session_id: str, goal: Optional[str] = None, actor: str = "main"):
+        self.repository = repository
+        self.session_id = session_id
+        self.actor = actor
+        if goal is not None:
+            self.repository.create_session(session_id, goal=goal, actor=actor)
+        self.engine = self.repository.rebuild_engine(session_id)
+
+    # ---------- 写入 ----------
+
+    def note(
+        self,
+        role: str,
+        content: str,
+        kind: str = "fact",
+        *,
+        reason: str = "",
+        evidence: str = "",
+        meta: Optional[dict] = None,
+        idempotency_key: Optional[str] = None,
+    ):
+        """角色结论/疑虑写入共享图（协调全经图，不传对话历史）。"""
+        if kind not in self._KINDS:
+            raise ValueError(f"未知节点类型：{kind}，可选 {sorted(self._KINDS)}")
+        row = self.repository.add_node(
+            self.session_id,
+            type_=self._KINDS[kind],
+            content=content,
+            actor=role,
+            reason=reason,
+            evidence=evidence,
+            meta=meta,
+            idempotency_key=idempotency_key,
+        )
+        self.engine = self.repository.rebuild_engine(self.session_id)
+        return row
+
+    def link(self, src, dst, type_, actor: Optional[str] = None):
+        edge = self.repository.link(
+            self.session_id, src, dst, type_, actor=actor or self.actor
+        )
+        self.engine = self.repository.rebuild_engine(self.session_id)
+        return edge
+
+    def supersede(self, old, new, reason: str = ""):
+        self.repository.supersede(self.session_id, old, new, reason=reason, actor=self.actor)
+        self.engine = self.repository.rebuild_engine(self.session_id)
+
+    def expire(self, node_id, reason: str = ""):
+        self.repository.expire(self.session_id, node_id, reason=reason, actor=self.actor)
+        self.engine = self.repository.rebuild_engine(self.session_id)
+
+    # ---------- checkpoint / 恢复 ----------
+
+    def checkpoint(
+        self,
+        pending_role: str,
+        task_state: str = "running",
+        retry_count: int = 0,
+        context_digest_version: str = "",
+    ):
+        return self.repository.save_checkpoint(
+            self.session_id,
+            task_state=task_state,
+            graph_version=len(self.repository.nodes(self.session_id)),
+            pending_role=pending_role,
+            retry_count=retry_count,
+            context_digest_version=context_digest_version,
+        )
+
+    def resume(self) -> dict:
+        """从最新 checkpoint 恢复：图重建 + 待执行角色/状态/版本。"""
+        row = self.repository.latest_checkpoint(self.session_id)
+        self.engine = self.repository.rebuild_engine(self.session_id)
+        if row is None:
+            return {
+                "task_state": "new",
+                "pending_role": "",
+                "graph_version": 0,
+                "retry_count": 0,
+                "context_digest_version": "",
+            }
+        return {
+            "task_state": row.task_state,
+            "pending_role": row.pending_role,
+            "graph_version": row.graph_version,
+            "retry_count": row.retry_count,
+            "context_digest_version": row.context_digest_version,
+        }

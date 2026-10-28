@@ -213,9 +213,29 @@ class GraphMemoryEngine:
 
     # ---------- 持久化 ----------
 
+    def to_snapshot(self) -> Dict[str, object]:
+        """导出图快照：持久化层重建与 JSONL 导出共用同一结构。"""
+        return {
+            "nodes": [n.to_dict() for n in self.nodes.values()],
+            "edges": [e.to_dict() for e in self.edges],
+        }
+
+    @classmethod
+    def from_snapshot(cls, data: Dict[str, object]) -> "GraphMemoryEngine":
+        """从快照还原引擎；编号计数器按已有节点重算，之后追加不撞号。"""
+        engine = cls()
+        for raw in data.get("edges", []):  # type: ignore[union-attr]
+            engine.edges.append(Edge.from_dict(dict(raw)))
+        for raw in data.get("nodes", []):  # type: ignore[union-attr]
+            node = Node.from_dict(dict(raw))
+            engine.nodes[node.id] = node
+        engine._recount()
+        return engine
+
     def save_jsonl(self, path) -> None:
-        lines = [{"kind": "node", **n.to_dict()} for n in self.nodes.values()]
-        lines += [e.to_dict() for e in self.edges]
+        snapshot = self.to_snapshot()
+        lines = [{"kind": "node", **n} for n in snapshot["nodes"]]  # type: ignore[arg-type]
+        lines += snapshot["edges"]  # type: ignore[operator]
         Path(path).write_text(
             "\n".join(json.dumps(l, ensure_ascii=False) for l in lines) + "\n",
             encoding="utf-8",
@@ -223,19 +243,18 @@ class GraphMemoryEngine:
 
     @classmethod
     def load_jsonl(cls, path) -> "GraphMemoryEngine":
-        engine = cls()
+        nodes: List[Dict] = []
+        edges: List[Dict] = []
         for line in Path(path).read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             d = json.loads(line)
             if d.get("kind") == "edge":
-                engine.edges.append(Edge.from_dict(d))
+                edges.append(d)
             else:
                 d.pop("kind", None)
-                node = Node.from_dict(d)
-                engine.nodes[node.id] = node
-        engine._recount()
-        return engine
+                nodes.append(d)
+        return cls.from_snapshot({"nodes": nodes, "edges": edges})
 
     def _recount(self) -> None:
         for node in self.nodes.values():
