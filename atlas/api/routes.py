@@ -75,9 +75,7 @@ def create_app(repository: GraphRepository,
 
     @app.post("/tasks/{session_id}/restore", response_model=schemas.TaskStateView)
     def restore_task(session_id: str):
-        if repository.latest_checkpoint(session_id) is None:
-            raise StateConflict("没有可恢复的 checkpoint")
-        return schemas.TaskStateView(**runtime.get_state(session_id))
+        return schemas.TaskStateView(**runtime.restore_task(session_id))
 
     @app.get("/tasks/{session_id}/trace", response_model=schemas.TraceView)
     def get_trace(session_id: str):

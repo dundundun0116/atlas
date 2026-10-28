@@ -38,7 +38,7 @@ fixture 是纯数据且带 `validate()`，因此任务集固定、可版本化�
 | 约束违规率 | 该 run 中出现任意一步违规即计 1（保守口径） |
 | 过期信息误用率 | 旧值出现在某一行且该行无"作废/修订"标记，即计 1 |
 | 恢复成功率 | 被中断的 run 中恢复并完成的占比；无中断时记 1.0 并单列 `interrupted_runs` |
-| 上下文 token / 调用次数 / 延迟 / 成本 | 按 run 汇总后取均值；token 与成本只在运行时真的测量到时才计 |
+| 上下文 token / 调用次数 / 延迟 / 成本 | token 按实际发送 prompt 计数；离线 harness 的延迟是 `synthetic_estimate`，不代表 API 实测；成本仍是按假定单价估算 |
 
 指标定义写在 `atlas/evaluation/metrics.py::REQUIRED_METRICS`，改变口径必须同时改这里。
 
@@ -70,10 +70,11 @@ export OPENCODE_COMPAT=1 OPENCODE_SESSION=atlas-eval-$(date +%s)
 
 口径说明（**报数字时必须一起给出**）：
 
-- "上下文 token"是**整条任务 40 步的累计值**（各步输入上下文求和），不是单次调用；
+- "上下文 token"是**整条任务各步实际发送 prompt 的累计值**，不是单次调用；真实模型 prompt 还包含任务目标、约束和当前问题；
 - 计数用 `tiktoken/cl100k_base`；`--tokenizer words` 只是廉价代理，不能进简历；
 - 成本列 = 累计 token × 假定单价（默认 0.002/千 token），是**估算**，不是账单；
 - `temperature=0` 时重复运行结果可能完全一致，重复的作用是排除基础设施抖动，不是降低模型方差。
+- 长程 fixture 的事实按子任务逐步提供，不预置未来事实；完成判定要求回答同时包含核心断言和当前问题主体，单独复述数字不算完成。
 注意 40 步时计划区自身可能超过组装预算，此时走的是**降级为计划区**的路径（与生产服务一致），必须留痕（`GraphStatePolicy.degraded_contexts`）。
 
 ## 6. 回放与排障

@@ -249,7 +249,7 @@ class Orchestrator:
             self._transition("audit_pass", "auditor 核验通过")
 
         # 4) 仅当 Auditor 判"需修订"：Worker 修订一次（作废草稿、原因入图）
-        if verdict == "revise" and issues:
+        if outcome == "repair_required" and issues:
             self.graph.role_note("auditor", "fact", f"草稿存在问题：{issues}", reason="auditor 核验")
             try:
                 revised = self._call(

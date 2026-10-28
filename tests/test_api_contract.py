@@ -258,3 +258,40 @@ class TestEngineMirror:
         assert statuses["D1"] == "superseded"
         assert statuses["S1"] == "expired"
         assert {e["type"] for e in body["edges"]} == {"subtask_of", "supersedes"}
+        imported_events = GraphRepository(db).events("s1")
+        assert [event.operation for event in imported_events].count("add_node") == 4
+        assert [event.operation for event in imported_events].count("link") == 2
+        replayed = GraphRepository(db).replay_states("s1")
+        assert replayed["D1"]["status"] == "superseded"
+        assert replayed["S1"]["status"] == "expired"
+
+
+class TestMemoryServerSessionRouting:
+    def test_role_notes_are_scoped_to_requested_user(self):
+        from eval import atlas_memory_server as server
+        from atlas.service import AtlasMemorySystem
+
+        token_counter = lambda text: max(1, len(str(text).split()))
+        previous = dict(server.SYSTEMS)
+        try:
+            server.SYSTEMS.clear()
+            server.SYSTEMS["u1"] = AtlasMemorySystem(
+                "u1", llm=lambda _prompt: "{}", token_counter=token_counter
+            )
+            server.SYSTEMS["u2"] = AtlasMemorySystem(
+                "u2", llm=lambda _prompt: "{}", token_counter=token_counter
+            )
+            server.role_note(
+                server.RoleNoteRequest(
+                    user_id="u1", role="planner", kind="decision", content="u1 route", reason="r"
+                )
+            )
+            assert "u1 route" in server.state_view(
+                server.StateViewRequest(user_id="u1")
+            )["view"]
+            assert "u1 route" not in server.state_view(
+                server.StateViewRequest(user_id="u2")
+            )["view"]
+        finally:
+            server.SYSTEMS.clear()
+            server.SYSTEMS.update(previous)

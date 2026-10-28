@@ -9,6 +9,7 @@
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -57,6 +58,17 @@ class TestFacadeLifecycle:
         assert second["replayed"] is True
         assert second["state"] == first["state"]
         assert repo.session_count() == 1
+
+    def test_concurrent_same_key_only_advances_once(self, runtime, repo):
+        runtime.create_task("s1", "g")
+
+        def submit():
+            return runtime.advance_task("s1", "plan_ready", idempotency_key="same")
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: submit(), range(2)))
+        assert sorted(result["replayed"] for result in results) == [False, True]
+        assert runtime.get_state("s1")["state"] == "executing"
 
     def test_advance_moves_state_and_checkpoints(self, runtime, repo):
         runtime.create_task("s1", "g")

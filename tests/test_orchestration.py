@@ -51,6 +51,7 @@ class ScriptedLLM:
 PLAN = json.dumps({"route": "用 Lemma 2 的鞅版本", "risks": "变量可能不独立", "reason": "题设依赖"})
 AUDIT_OK = json.dumps({"verdict": "ok", "issues": ""})
 AUDIT_REVISE = json.dumps({"verdict": "revise", "issues": "常数项用了 τσ²，应为 τ²σ²"})
+AUDIT_REPAIR_REQUIRED = json.dumps({"verdict": "repair_required", "issues": "常数项需要修订"})
 PROBLEM = "题目：给出 L(h^t,w^t) 的上界"
 
 
@@ -78,6 +79,14 @@ class TestHappyPath:
             ("worker", "artifact_revise"),
         ]
         assert graph.notes[-1]["reason"] == "常数项用了 τσ²，应为 τ²σ²"
+
+    def test_canonical_repair_required_also_runs_revision(self):
+        graph, llm = FakeGraph(), ScriptedLLM(
+            [PLAN, "草稿", AUDIT_REPAIR_REQUIRED, "规范化修订稿"]
+        )
+        answer, trace = Orchestrator(llm, graph).solve(PROBLEM)
+        assert answer == "规范化修订稿"
+        assert trace.calls[-1] == "worker_revise"
 
     def test_prompts_carry_state_view_and_route(self):
         graph = FakeGraph(views={"planner": "约束：γL≤1/24"})

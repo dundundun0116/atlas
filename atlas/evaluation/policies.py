@@ -26,6 +26,7 @@ class MemoryState:
     records: List[str] = field(default_factory=list)
     summaries: List[str] = field(default_factory=list)
     constraints: List[str] = field(default_factory=list)
+    current_record: str = ""
 
 
 class MemoryPolicy:
@@ -58,15 +59,18 @@ class FullHistoryPolicy(MemoryPolicy):
 
 
 class NarrativeSummaryPolicy(MemoryPolicy):
-    """只有摘要：短语能过，但约束/精确值容易丢（这正是要测的失败模式）。"""
+    """摘要记忆：保留摘要窗口，并让当前工具证据进入本轮上下文。"""
 
     name = "narrative_summary"
 
     def context(self, state: MemoryState, question: str) -> str:
-        if not state.summaries:
+        if not state.summaries and not state.current_record:
             return ""
-        # 摘要记忆的典型行为：只保留最近两条（更早的压没了）
-        return "已完成工作摘要:\n" + "\n".join(state.summaries[-2:])
+        # 历史摘要只留最近两条；当前轮工具结果不能被记忆压缩策略吞掉。
+        parts = ["已完成工作摘要:", *state.summaries[-2:]]
+        if state.current_record:
+            parts.extend(["当前工具证据:", state.current_record])
+        return "\n".join(parts)
 
 
 class GraphStatePolicy(MemoryPolicy):

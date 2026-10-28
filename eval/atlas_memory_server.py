@@ -128,10 +128,12 @@ class WrapRequest(BaseModel):
 
 
 class StateViewRequest(BaseModel):
+    user_id: str
     role: str = "worker"
 
 
 class RoleNoteRequest(BaseModel):
+    user_id: str
     role: str
     kind: str
     content: str
@@ -242,26 +244,25 @@ def _flush_events(system) -> None:
         events.clear()
 
 
-def _current_atlas() -> AtlasMemorySystem:
-    """当前 atlas 会话：runner 单进程顺序执行，取最近初始化的 atlas 系统即可。"""
-    for user_id in reversed(list(SYSTEMS)):
-        system = SYSTEMS[user_id]
-        if isinstance(system, AtlasMemorySystem):
-            return system
-    raise HTTPException(status_code=404, detail="no atlas session initialized")
+def _current_atlas(user_id: str) -> AtlasMemorySystem:
+    """按请求会话路由，避免多个任务共享最近初始化的图。"""
+    system = SYSTEMS.get(user_id)
+    if not isinstance(system, AtlasMemorySystem):
+        raise HTTPException(status_code=404, detail="atlas session not initialized")
+    return system
 
 
 @app.post("/memory/state_view")
 def state_view(req: StateViewRequest):
     """编排角色读共享图：返回计划区 + 踩坑提示。"""
-    return {"view": _current_atlas().state_view(req.role)}
+    return {"view": _current_atlas(req.user_id).state_view(req.role)}
 
 
 @app.post("/memory/role_note")
 def role_note(req: RoleNoteRequest):
     """编排角色写共享图：结论/疑虑落成节点，actor 标记角色。"""
     try:
-        system = _current_atlas()
+        system = _current_atlas(req.user_id)
         note = system.role_note(req.role, req.kind, req.content, req.reason, req.evidence)
         _mirror(system)
         return note

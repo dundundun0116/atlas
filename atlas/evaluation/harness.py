@@ -5,6 +5,7 @@ harness 里的研究者是**脚本化的**——能不能答对只取决于上�
 所以策略差异、故障恢复、指标口径都能反复复现，等真正跑评测时只需换研究者实现。
 """
 
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -60,6 +61,7 @@ class RunResult:
     context_tokens: int = 0
     model_calls: int = 0
     latency_ms: float = 0.0
+    latency_source: str = "synthetic_estimate"
     cost_usd: float = 0.0
 
     # ---------- 汇总口径 ----------
@@ -110,6 +112,21 @@ def contains_probe(answer: str, probe: str) -> bool:
     if not needle:
         return True
     return needle in normalize_text(answer)
+
+
+def answer_mentions_subject(answer: str, question: str) -> bool:
+    """要求答案同时提及问题主体，避免单独复述一个数字被判正确。"""
+    normalized_answer = normalize_text(answer)
+    candidates = re.findall(
+        r"[一-龥]{2,}|[a-zA-Z][a-zA-Z0-9_]{1,}|\d+", str(question or "")
+    )
+    ignored = {"多少", "什么", "如何", "哪个", "取值", "得到", "给出", "最终", "对应"}
+    subjects = [
+        normalize_text(item)
+        for item in candidates
+        if normalize_text(item) not in ignored and not item.isdigit()
+    ]
+    return bool(subjects) and any(subject in normalized_answer for subject in subjects)
 
 
 class ScriptedResearcher:
@@ -194,7 +211,9 @@ class ModelResearcher:
             return {"answer": "", "completed": False, "violation": False,
                     "stale_misuse": False, "error": f"{type(exc).__name__}: {exc}"}
         target = subtask.probe or subtask.required_fact
-        completed = bool(text) and contains_probe(text, target)
+        completed = bool(text) and contains_probe(text, target) and answer_mentions_subject(
+            text, subtask.question
+        )
         violation = bool(subtask.forbidden_method) and contains_probe(
             text, subtask.forbidden_method
         )
@@ -291,6 +310,16 @@ class ResearchHarness:
             if stop_before >= 0 and index >= stop_before:
                 break
             subtask = self.fixture.subtasks[index]
+            if index < len(self.fixture.step_records):
+                current_evidence = self.fixture.step_records[index]
+                self.state.current_record = current_evidence
+                if current_evidence not in self.state.records:
+                    self.state.records.append(current_evidence)
+                    absorb = getattr(self.policy, "absorb", None)
+                    if callable(absorb):
+                        absorb(self.state, current_evidence)
+            else:
+                self.state.current_record = ""
             if faults.stale_decision_at == index and self.fixture.stale_values:
                 stale = self.fixture.stale_values[0]
                 injected = f"旧决策: 常数项 {stale}（来自旧版本记录）"
@@ -300,7 +329,13 @@ class ResearchHarness:
                     if callable(absorb):
                         absorb(self.state, injected)
             context = self.policy.context(self.state, subtask.question)
-            tokens = self.policy.count(context)
+            # 真实模型会接收截断后的完整 prompt；统计同一字符串，避免把
+            # 未发送的长上下文冒充为实际输入成本。
+            measured_prompt = context
+            build_prompt = getattr(self.researcher, "build_prompt", None)
+            if callable(build_prompt):
+                measured_prompt = build_prompt(subtask, context)
+            tokens = self.policy.count(measured_prompt)
             self.context_tokens += tokens
 
             if faults.duplicate_submit_from >= 0 and index >= faults.duplicate_submit_from:

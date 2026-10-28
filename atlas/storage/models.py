@@ -133,7 +133,8 @@ class CheckpointRow(Base):
     graph_version: Mapped[int] = mapped_column(Integer, default=0)
     pending_role: Mapped[str] = mapped_column(String(24), default="")
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
-    context_digest_version: Mapped[str] = mapped_column(String(64), default="")
+    # 状态机快照是完整 JSON，长度随历史增长，不应受 64 字符限制。
+    context_digest_version: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[str] = mapped_column(String(32), default=_now)
 
 

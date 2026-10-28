@@ -5,6 +5,7 @@
 错误收敛成稳定分类。HTTP 层（`atlas/api/routes.py`）只是这个门面的薄壳。
 """
 
+import threading
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
@@ -74,6 +75,8 @@ class AgentRuntime:
                  tracer_factory: Optional[Callable[[str], Tracer]] = None):
         self.repository = repository
         self.tracer_factory = tracer_factory
+        self._lock_guard = threading.Lock()
+        self._session_locks: Dict[str, threading.RLock] = {}
 
     # ---------- 任务生命周期 ----------
 
@@ -249,6 +252,15 @@ class AgentRuntime:
             "report": "\n".join(lines),
         }
 
+    def restore_task(self, session_id: str) -> Dict[str, Any]:
+        """从持久化 checkpoint 重建图和状态机，再返回恢复后的契约视图。"""
+        runtime = self._load(session_id)
+        checkpoint = self.repository.latest_checkpoint(session_id)
+        if checkpoint is None:
+            raise StateConflict("没有可恢复的 checkpoint")
+        runtime.resume()
+        return self.get_state(session_id)
+
     def replay(self, session_id: str) -> Dict[str, Any]:
         """只凭事件与 checkpoint 回放：重建生命周期、检测损坏、列出 trace。"""
         self._load(session_id)
@@ -303,16 +315,23 @@ class AgentRuntime:
 
     def _idempotent(self, session_id: str, key: str, operation: str,
                     produce: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
-        if key:
-            cached = self.repository.get_idempotent_result(session_id, key)
-            if cached is not None:
-                replay = dict(cached)
-                replay["replayed"] = True
-                return replay
-        result = produce()
-        if key:
-            self.repository.record_idempotent_result(session_id, key, operation, result)
-        return result
+        # FastAPI 线程池会并发处理请求；同一运行时实例内先串行化同一会话，
+        # 避免两个相同幂等键同时推进状态机。跨进程部署仍应使用单独的请求表/锁服务。
+        with self._lock_guard:
+            lock = self._session_locks.setdefault(session_id, threading.RLock())
+        with lock:
+            if key:
+                cached = self.repository.get_idempotent_result(session_id, key)
+                if cached is not None:
+                    replay = dict(cached)
+                    replay["replayed"] = True
+                    return replay
+            result = produce()
+            if key:
+                result = self.repository.record_idempotent_result(
+                    session_id, key, operation, result
+                )
+            return result
 
     def _guard(self, request_id: str, fn: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
         """把内部异常收敛成稳定分类，并把 request_id 带上。"""

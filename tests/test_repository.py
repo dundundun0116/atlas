@@ -329,3 +329,13 @@ class TestJsonlExport:
         out = repo.export_jsonl(session_id, tmp_path / "graph.jsonl")
         out.unlink()
         assert [n.node_id for n in repo.nodes(session_id)] == ["G1"]
+
+    def test_import_engine_assigns_ordered_sequences_and_graph_versions(self, repo, session_id):
+        engine = GraphMemoryEngine()
+        engine.add_fact("a")
+        engine.add_fact("b")
+        result = repo.import_engine(session_id, engine)
+        assert result == {"nodes": 2, "edges": 0}
+        assert [node.seq for node in repo.nodes(session_id)] == [1, 2]
+        assert [event.seq for event in repo.events(session_id)] == [1, 2]
+        assert repo.get_session(session_id).graph_version == 2

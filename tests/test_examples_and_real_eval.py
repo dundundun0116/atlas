@@ -81,6 +81,13 @@ class TestModelResearcher:
         assert outcome["completed"] is True
         assert outcome["violation"] is False
 
+    def test_bare_probe_is_not_a_complete_answer(self):
+        fixture = self._fixture()
+        outcome = ModelResearcher(fixture, lambda prompt: "2τσ²").answer(
+            fixture.subtasks[0], "上下文"
+        )
+        assert outcome["completed"] is False
+
     def test_missing_fact_is_not_completed(self):
         fixture = self._fixture()
         outcome = ModelResearcher(fixture, lambda p: "无法确定").answer(fixture.subtasks[0], "")

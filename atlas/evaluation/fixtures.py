@@ -42,6 +42,8 @@ class Fixture:
     #: 运行前已存在的记录/摘要（模拟"上一轮留下的旧记忆"）
     seed_records: Tuple[str, ...] = ()
     seed_summaries: Tuple[str, ...] = ()
+    #: 每个子任务开始前才可获得的当前证据，避免把未来事实预置给记忆策略。
+    step_records: Tuple[str, ...] = ()
 
     def validate(self) -> None:
         if not self.subtasks:
@@ -52,6 +54,8 @@ class Fixture:
         for subtask in self.subtasks:
             if not str(subtask.required_fact or "").strip():
                 raise ValueError(f"{self.task_id}/{subtask.subtask_id}: required_fact 为空")
+        if self.step_records and len(self.step_records) != len(self.subtasks):
+            raise ValueError(f"{self.task_id}: step_records 必须与子任务数量一致")
         if self.requires_revision and not self.constraints:
             raise ValueError(f"{self.task_id}: requires_revision 但没有约束")
 
@@ -179,7 +183,7 @@ def long_horizon_fixture(steps: int = 12) -> Fixture:
     - 摘要策略只留最近两条（且摘要里只有前两个参数的取值）→ 后半段必然丢值。
     """
     facts = [(f"k{i}", round(1 + i * 0.75, 2)) for i in range(1, steps + 1)]
-    seed_records = tuple(
+    step_records = tuple(
         f"fact: 参数 {key} = {value:g}（来源 附录 {index + 1}）"
         for index, (key, value) in enumerate(facts)
     )
@@ -200,8 +204,9 @@ def long_horizon_fixture(steps: int = 12) -> Fixture:
         family="long_horizon",
         goal="汇总附录里的全部参数取值",
         constraints=("必须引用附录中的原值",),
-        seed_records=seed_records,
+        seed_records=(),
         seed_summaries=seed_summaries,
+        step_records=step_records,
         subtasks=subtasks,
     )
 

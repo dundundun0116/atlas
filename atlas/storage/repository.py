@@ -463,11 +463,13 @@ class GraphRepository:
         """
         inserted_nodes = 0
         inserted_edges = 0
+        inserted_node_ids: set[str] = set()
         with self._tx() as session:
             self._require_session(session, session_id)
             for node in sorted(engine.nodes.values(), key=lambda n: n.id):
                 if session.get(NodeRow, (session_id, node.id)) is not None:
                     continue
+                node_seq = self._next_node_seq(session, session_id)
                 session.add(
                     NodeRow(
                         session_id=session_id,
@@ -486,12 +488,38 @@ class GraphRepository:
                         valid_until=node.valid_until,
                         verified_at=node.verified_at,
                         meta=node.meta or {},
-                        seq=self._next_seq(session, session_id),
+                        seq=node_seq,
                         created_at=node.created_at or _now(),
                     )
                 )
                 session.flush()
+                self._emit_event(
+                    session, session_id, ev.ADD_NODE, node.actor,
+                    ev.node_added(node.id, node.type.value, node.content, node.actor),
+                )
+                self._bump_version(session, session_id)
                 inserted_nodes += 1
+                inserted_node_ids.add(node.id)
+            # Snapshot rows retain lifecycle state, but replay also needs the
+            # corresponding transitions to reconstruct the same state.
+            for node in sorted(engine.nodes.values(), key=lambda n: n.id):
+                if node.id not in inserted_node_ids:
+                    continue
+                if node.status is NodeStatus.SUPERSEDED and node.superseded_by:
+                    self._emit_event(
+                        session, session_id, ev.SUPERSEDE, node.actor,
+                        ev.node_superseded(node.id, node.superseded_by, node.note),
+                    )
+                elif node.status is NodeStatus.EXPIRED:
+                    self._emit_event(
+                        session, session_id, ev.EXPIRE, node.actor,
+                        ev.node_expired(node.id, node.note),
+                    )
+                elif node.status is NodeStatus.DONE:
+                    self._emit_event(
+                        session, session_id, ev.COMPLETE_SUBTASK, node.actor,
+                        ev.subtask_completed(node.id),
+                    )
             for edge in engine.edges:
                 if self._find_edge(session, session_id, edge.src, edge.dst, edge.type) is not None:
                     continue
@@ -505,8 +533,12 @@ class GraphRepository:
                     )
                 )
                 session.flush()
+                self._emit_event(
+                    session, session_id, ev.LINK, "import",
+                    ev.edge_linked(edge.src, edge.dst, edge.type),
+                )
+                self._bump_version(session, session_id)
                 inserted_edges += 1
-            self._bump_version(session, session_id)
         return {"nodes": inserted_nodes, "edges": inserted_edges}
 
     # ---------- 重建 ----------
@@ -602,6 +634,12 @@ class GraphRepository:
         ).all()
         numbers = [int(i[len(prefix):]) for i in ids if i[len(prefix):].isdigit()]
         return f"{prefix}{max(numbers, default=0) + 1}"
+
+    def _next_node_seq(self, session: Session, session_id: str) -> int:
+        current = session.scalar(
+            select(func.max(NodeRow.seq)).where(NodeRow.session_id == session_id)
+        )
+        return int(current or 0) + 1
 
     def _find_edge(
         self, session: Session, session_id: str, src: str, dst: str, type_: EdgeType

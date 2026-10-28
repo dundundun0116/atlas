@@ -27,13 +27,15 @@ JSON_MAX_TOKENS = int(os.getenv("ATLAS_ROLE_JSON_MAX_TOKENS", "4000"))  # 机械
 class MemoryServerGraphClient:
     """共享图客户端（HTTP；协调全经图）。"""
 
-    def __init__(self, base_url: str, timeout: int = 180):
+    def __init__(self, base_url: str, user_id: str, timeout: int = 180):
         self.base_url = base_url.rstrip("/")
+        self.user_id = user_id
         self.timeout = timeout
 
     def state_view(self, role: str) -> str:
         resp = requests.post(
-            f"{self.base_url}/memory/state_view", json={"role": role}, timeout=self.timeout
+            f"{self.base_url}/memory/state_view",
+            json={"user_id": self.user_id, "role": role}, timeout=self.timeout
         )
         resp.raise_for_status()
         return resp.json()["view"]
@@ -42,7 +44,7 @@ class MemoryServerGraphClient:
                   evidence: str = "") -> dict:
         resp = requests.post(
             f"{self.base_url}/memory/role_note",
-            json={"role": role, "kind": kind, "content": content,
+            json={"user_id": self.user_id, "role": role, "kind": kind, "content": content,
                   "reason": reason, "evidence": evidence},
             timeout=self.timeout,
         )
@@ -99,7 +101,9 @@ class OrchestratedMathAgent(MathAgent):
 
     def act(self, prompt: str):
         problem = prompt.split("\nUser: ", 1)[1] if "\nUser: " in prompt else prompt
-        graph = MemoryServerGraphClient(self.memory_url)
+        graph = MemoryServerGraphClient(
+            self.memory_url, user_id=str(getattr(self, "user_id", "") or "session")
+        )
         trace = None
         self._subtask_seq = getattr(self, "_subtask_seq", 0) + 1
         subtask_id = f"S{self._subtask_seq}"

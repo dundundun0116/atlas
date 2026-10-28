@@ -214,7 +214,8 @@ class TestLongHorizon:
         fixture = long_horizon_fixture(12)
         fixture.validate()
         assert len(fixture.subtasks) == 12
-        assert len(fixture.seed_records) == 12
+        assert len(fixture.seed_records) == 0
+        assert len(fixture.step_records) == 12
 
     def test_graph_state_scales_better_than_full_history(self):
         from atlas.evaluation.fixtures import long_horizon_fixture
