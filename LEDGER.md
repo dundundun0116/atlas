@@ -128,12 +128,20 @@
 - B 臂结果文件：`runs/qa/musique__plus_full_words__samples.jsonl`（50 题）与轨迹 `runs/traces/musique__plus_full_words.jsonl`；manifest 指纹 `6a52c881655dc554`。**注意 `runs/` 不入库**，数字以 `docs/experiment-answer-format.md` 与 `decisions/D11` 里的表为准；要复现需重跑（命令在实验文档里）。
 - 测试 228 passed（新增 arms 5 条）。下一步仍等预算决定：六配置重跑 280 万（推荐）> C 臂 100 万 > 同预算 20–30 万 > 三基准 300 万+。
 
+## 2026-10-28 STATUS 与交接单同步（H1 之后）
+
+- `docs/STATUS.md` 重写：HEAD `cc4bbac`、228 测试、A–E 逐阶段证据、**H1 实验结论**、以及四条已知边界（六配置仍是旧措辞口径 / 核验定位取决于口径 / plan 只有弱代理 / 三基准与同预算未跑）。已提交（`cc4bbac`）。
+- 新交接单：`_handoff/2026-10-28-1634-…（H1 已确认，待六配置重跑）`，写明当前数字、下一步四种花费与各自的理由。
+- 工作区干净，HEAD `cc4bbac`；`runs/` 不入库（数字以文档与 `decisions/` 为准）。
+- **当前不缺代码、不缺文档、不缺测试，只缺一个预算决定**：是否用 `strict_answer_words=5` 重跑六配置（≈280 万 token）。这是唯一能让公开表严格 EM 反映真实水平的一步。
+
 
 ## 变更登记（插件自动维护）
 
 > 这张表由插件**自动**维护：每次写台账 / 归档追加一行，只留最近 12 条（条数可在设置里调，项目清单里的 `changeRegisterMax` 优先）。
 > 完整历史在活动日志的 `L0-ledger-changes.md`（用 `ledger_log({view:"audit"})` 查）。
 
+- 2026-10-28 16:34:52 (append) [486c] +7 行 → 136 行 · revision→36
 - 2026-10-28 16:31:53 (append) [486c] +6 行 → 129 行 · revision→35
 - 2026-10-28 16:30:08 (append) [486c] +11 行 → 123 行 · revision→34
 - 2026-10-28 13:30:01 (append) [486c] +6 行 → 112 行 · revision→33
@@ -145,4 +153,3 @@
 - 2026-10-28 13:25:43 (append) [486c] +8 行 → 242 行 · revision→27
 - 2026-10-28 13:25:10 (append) [486c] +9 行 → 234 行 · revision→26
 - 2026-10-28 13:24:29 (append) [486c] +7 行 → 225 行 · revision→25
-- 2026-10-28 13:23:50 (append) [486c] +8 行 → 218 行 · revision→24
