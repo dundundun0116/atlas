@@ -67,13 +67,37 @@ class TestApplyOps:
         assert any(n.content == "Lemma 2 给出鞅版本界" for n in eng.nodes.values())
 
     def test_bad_json_degrades_without_touching_graph(self):
+        """阶段 D：解析失败走有限重试，用尽后降级为规则摘要（图仍不动）。"""
         eng = make_engine()
         before = set(eng.nodes)
         res = LLMCarryOverExtractor(FakeLLM("抱歉，我无法完成。")).extract(RAW, eng)
         assert res.error
-        assert res.summary == ""
+        assert res.degraded is True
+        assert res.attempts == 2          # 默认有限重试 2 次
+        assert res.summary                # 规则摘要兜底，保证结转仍有一句话
         assert set(eng.nodes) == before
         assert eng.edges == []
+
+    def test_retry_recovers_when_second_attempt_is_valid(self):
+        eng = make_engine()
+        good = json.dumps({"operations": [{"op": "add_node", "type": "fact",
+                                           "content": "Lemma 2 给出鞅版本界",
+                                           "source": "paper:2312.05134", "confidence": 0.9}],
+                           "summary": "拿到主引理"})
+        replies = ["不是 JSON", good]
+
+        class FlakyLLM:
+            def __call__(self, _prompt):
+                return replies.pop(0)
+
+        res = LLMCarryOverExtractor(FlakyLLM()).extract(RAW, eng)
+        assert res.error == ""
+        assert res.attempts == 2
+        assert res.degraded is False
+        fact = [n for n in eng.nodes.values() if n.type == NodeType.FACT][-1]
+        assert fact.content == "Lemma 2 给出鞅版本界"
+        assert fact.source == "paper:2312.05134"
+        assert fact.confidence == 0.9
 
     def test_supersede_replaces_and_records_reason(self):
         eng = make_engine()

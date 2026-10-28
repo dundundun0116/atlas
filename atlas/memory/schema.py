@@ -77,6 +77,11 @@ class Node:
     note: str = ""       # 作废/过期原因或补充标注
     reason: str = ""     # Decision 专属：为什么做这个决定
     evidence: str = ""   # Decision 专属：依据
+    source: str = ""        # 阶段 D：来源（论文/chunk/角色/工具）
+    confidence: float = 0.0 # 阶段 D：0–1 可信度
+    valid_from: str = ""    # 阶段 D：生效起点（ISO）
+    valid_until: str = ""   # 阶段 D：失效时点（ISO），空=不过期
+    verified_at: str = ""   # 阶段 D：最后一次核验时间（ISO）
     meta: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -91,6 +96,11 @@ class Node:
             "note": self.note,
             "reason": self.reason,
             "evidence": self.evidence,
+            "source": self.source,
+            "confidence": float(self.confidence or 0.0),
+            "valid_from": self.valid_from,
+            "valid_until": self.valid_until,
+            "verified_at": self.verified_at,
             "meta": self.meta,
         }
 
@@ -107,6 +117,11 @@ class Node:
             note=d.get("note", ""),
             reason=d.get("reason", ""),
             evidence=d.get("evidence", ""),
+            source=d.get("source", ""),
+            confidence=float(d.get("confidence") or 0.0),
+            valid_from=d.get("valid_from", ""),
+            valid_until=d.get("valid_until", ""),
+            verified_at=d.get("verified_at", ""),
             meta=d.get("meta", {}),
         )
 

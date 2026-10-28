@@ -67,6 +67,8 @@ class CarryOverManager:
         self.step += len(recent_raw)
         start = self.step - len(recent_raw)
         llm_summary = getattr(result, "summary", "") if result is not None else ""
+        if getattr(result, "degraded", False) and llm_summary:
+            llm_summary = f"[降级·规则摘要] {llm_summary}"
         if llm_summary:
             summary = [f"[步骤 {start + 1}–{self.step}] {llm_summary}"]
         else:

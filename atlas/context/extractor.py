@@ -92,6 +92,9 @@ class ExtractionResult:
     summary: str = ""
     error: str = ""
     raw_output: str = ""
+    # 阶段 D：有限重试次数与降级标记（降级原因要能在 trace 里定位）
+    attempts: int = 0
+    degraded: bool = False
 
 
 class LLMCarryOverExtractor:
@@ -106,25 +109,43 @@ class LLMCarryOverExtractor:
         recent_raw: Sequence[str],
         engine: GraphMemoryEngine,
         next_question: Optional[str] = None,
+        max_attempts: int = 2,
     ) -> ExtractionResult:
+        """有限重试 → 仍失败则降级为规则摘要（绝不打断跑分）。"""
         prompt = self._build_prompt(engine, recent_raw, next_question)
-        try:
-            raw = self.llm(prompt) or ""
-        except Exception as e:  # LLM 通道故障 → 降级，不打断跑分
-            return ExtractionResult(error=f"LLM 调用失败：{type(e).__name__}: {e}")
-        payload = parse_json_object(raw)
-        if payload is None:
-            excerpt = " ".join(raw.split())[:200]
+        last_error = ""
+        raw = ""
+        attempts = max(1, max_attempts)
+        for attempt in range(1, attempts + 1):
+            try:
+                raw = self.llm(prompt) or ""
+            except Exception as e:  # LLM 通道故障 → 计入重试
+                last_error = f"LLM 调用失败：{type(e).__name__}: {e}"
+                continue
+            payload = parse_json_object(raw)
+            if payload is None:
+                excerpt = " ".join(raw.split())[:200]
+                last_error = f"LLM 输出无法解析为 JSON（前 200 字符：{excerpt!r}）"
+                continue
+            ops = payload.get("operations") or []
+            if not isinstance(ops, list):
+                last_error = "operations 不是列表"
+                continue
+            applied, skipped = self._apply(engine, ops)
             return ExtractionResult(
-                error=f"LLM 输出无法解析为 JSON（前 200 字符：{excerpt!r}）", raw_output=raw
+                ops_applied=applied,
+                ops_skipped=skipped,
+                summary=str(payload.get("summary") or "").strip(),
+                raw_output=raw,
+                attempts=attempt,
             )
-        ops = payload.get("operations") or []
-        if not isinstance(ops, list):
-            return ExtractionResult(error="operations 不是列表", raw_output=raw)
-        applied, skipped = self._apply(engine, ops)
-        summary = str(payload.get("summary") or "").strip()
+        # 用尽重试：规则摘要 + 近期记录降级，error 里保留最后一次失败原因
         return ExtractionResult(
-            ops_applied=applied, ops_skipped=skipped, summary=summary, raw_output=raw
+            error=last_error,
+            raw_output=raw,
+            attempts=attempts,
+            degraded=True,
+            summary=_rule_summary(recent_raw),
         )
 
     # ---------- 提示词 ----------
@@ -179,7 +200,18 @@ class LLMCarryOverExtractor:
             raise _OpError("已有 goal 节点")
         if _is_duplicate(engine, node_type, content):
             raise _OpError(f"与既有活跃节点重复：{content[:40]}")
-        kwargs = {"note": str(op.get("note") or ""), "actor": _LLM_ACTOR}
+        try:
+            confidence = float(op.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            raise _OpError("confidence 不是数字")
+        kwargs = {
+            "note": str(op.get("note") or ""),
+            "actor": _LLM_ACTOR,
+            "source": str(op.get("source") or _LLM_ACTOR),
+            "confidence": max(0.0, min(1.0, confidence)),
+            "valid_until": str(op.get("valid_until") or ""),
+            "verified_at": str(op.get("verified_at") or ""),
+        }
         if node_type == NodeType.DECISION:
             reason = str(op.get("reason") or "").strip()
             if not reason:
@@ -300,3 +332,11 @@ def _render_graph(engine: GraphMemoryEngine) -> str:
             f"{node.content}{suffix}"
         )
     return "\n".join(lines)
+
+
+def _rule_summary(recent_raw: Sequence[str], limit: int = 160) -> str:
+    """规则摘要：不调模型，取最近两条记录的头部（降级路径也要有可读摘要）。"""
+    tail = [str(entry).strip() for entry in list(recent_raw)[-2:] if str(entry).strip()]
+    if not tail:
+        return ""
+    return "；".join(" ".join(entry.split())[:limit] for entry in tail)

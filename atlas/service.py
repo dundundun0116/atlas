@@ -250,6 +250,10 @@ class ServiceRuntime:
         evidence: str = "",
         meta: Optional[dict] = None,
         idempotency_key: Optional[str] = None,
+        source: str = "",
+        confidence: float = 0.0,
+        valid_until: str = "",
+        verified_at: str = "",
     ):
         """角色结论/疑虑写入共享图（协调全经图，不传对话历史）。"""
         if kind not in self._KINDS:
@@ -263,6 +267,10 @@ class ServiceRuntime:
             evidence=evidence,
             meta=meta,
             idempotency_key=idempotency_key,
+            source=source,
+            confidence=confidence,
+            valid_until=valid_until,
+            verified_at=verified_at,
         )
         self.engine = self.repository.rebuild_engine(self.session_id)
         return row

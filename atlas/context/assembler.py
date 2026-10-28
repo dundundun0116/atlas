@@ -18,6 +18,7 @@
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Sequence, Tuple
 
+from atlas.context import provenance
 from atlas.memory.engine import GraphMemoryEngine
 from atlas.memory.schema import EdgeType, NodeStatus, NodeType
 
@@ -44,6 +45,10 @@ class AssembleResult:
     zone_tokens: Dict[str, int] = field(default_factory=dict)
     audit_ok: bool = True
     trimmed: Dict[str, bool] = field(default_factory=dict)
+    # 阶段 D：组装统计与治理报告（哪些节点被挡、为什么）
+    actual_tokens: int = 0
+    filtered: Dict[str, str] = field(default_factory=dict)
+    provenance: Dict[str, object] = field(default_factory=dict)
 
 
 class ContextAssembler:
@@ -99,12 +104,16 @@ class ContextAssembler:
         text = "\n\n".join([plan_text] + [zone_texts[k] for k in self._ZONE_HEADERS])
         text = text.rstrip() + "\n"
         self._audit(text)
+        audit = getattr(self, "_last_audit", None)
         return AssembleResult(
             text=text,
             zone_tokens={"plan": plan_tokens,
                          **{k: self.count(v) for k, v in zone_texts.items()}},
             audit_ok=True,
             trimmed=trimmed,
+            actual_tokens=self.count(text),
+            filtered=audit.filtered_ids() if audit is not None else {},
+            provenance=audit.to_dict() if audit is not None else {},
         )
 
     _ZONE_HEADERS = {
@@ -121,6 +130,10 @@ class ContextAssembler:
 
     def _render_plan(self) -> str:
         eng = self.engine
+        audit = provenance.audit_nodes(eng.nodes.values())
+        self._last_audit = audit
+        stale = set(audit.filtered_ids())
+        unverified = set(audit.unverified)
         lines = [ZONE_PLAN]
         goal = eng.current_goal()
         if goal:
@@ -133,25 +146,42 @@ class ContextAssembler:
                         if e.type == EdgeType.DEPENDS_ON and e.src == sid]
                 dep_note = f" (依赖 {', '.join(deps)})" if deps else ""
                 lines.append(f"  - [{sid}] {eng.nodes[sid].content}{dep_note}")
-        cons = eng.active_constraints()
+        cons = [c for c in eng.active_constraints() if c.id not in stale]
         if cons:
             lines.append("活跃约束:")
-            lines += [f"  - [{c.id}] {c.content}" for c in cons]
-        decs = eng.active_decisions()
+            lines += [f"  - [{c.id}] {c.content}{self._source_note(c)}" for c in cons]
+        decs = [d for d in eng.active_decisions() if d.id not in stale]
         if decs:
             lines.append("关键决定:")
-            lines += [f"  - [{d.id}] {d.content} (原因: {d.reason})" for d in decs]
-        facts = [n for n in eng.nodes.values()
-                 if n.type == NodeType.FACT and n.status == NodeStatus.ACTIVE]
+            lines += [f"  - [{d.id}] {d.content} (原因: {d.reason}){self._source_note(d)}" for d in decs]
+        ordered = sorted(eng.nodes.values(), key=lambda n: n.id)
+        facts = [n for n in ordered
+                 if n.type is NodeType.FACT and n.status is NodeStatus.ACTIVE and n.id not in stale]
         if facts:
             lines.append("环境事实:")
-            lines += [f"  - [{f.id}] {f.content}" for f in facts]
-        artifacts = [n for n in eng.nodes.values()
-                     if n.type == NodeType.ARTIFACT and n.status == NodeStatus.ACTIVE]
+            lines += [f"  - [{f.id}] {f.content}{self._source_note(f)}" for f in facts]
+        artifacts = [n for n in ordered
+                     if n.type is NodeType.ARTIFACT and n.status is NodeStatus.ACTIVE
+                     and n.id not in stale]
         if artifacts:
             lines.append("产出物:")
-            lines += [f"  - [{a.id}] {a.content}" for a in artifacts]
+            lines += [
+                f"  - [{a.id}] {a.content}{'（未验证）' if a.id in unverified else ''}"
+                + self._source_note(a)
+                for a in artifacts
+            ]
+        lines += provenance.risk_lines(audit)
         return "\n".join(lines)
+
+    @staticmethod
+    def _source_note(node) -> str:
+        """来源与可信度只在实际有值时标注，避免污染既有输出格式。"""
+        parts = []
+        if str(getattr(node, "source", "") or "").strip():
+            parts.append(f"来源: {node.source}")
+        if getattr(node, "confidence", 0.0):
+            parts.append(f"置信度 {node.confidence:.2f}")
+        return f" ({', '.join(parts)})" if parts else ""
 
     @staticmethod
     def _render_zone(header: str, items: List[str]) -> str:
@@ -174,7 +204,12 @@ class ContextAssembler:
     # ---------- 查账（决策清单 #3） ----------
 
     def _audit(self, text: str) -> None:
-        must_show = self.engine.active_constraints() + self.engine.active_decisions()
+        audit = getattr(self, "_last_audit", None)
+        stale = set(audit.filtered_ids()) if audit is not None else set()
+        must_show = [
+            n for n in self.engine.active_constraints() + self.engine.active_decisions()
+            if n.id not in stale
+        ]
         missing = [n.id for n in must_show if f"[{n.id}]" not in text]
         if missing:
             raise AuditError(f"活跃约束/决定未出现在组装结果中: {missing}")

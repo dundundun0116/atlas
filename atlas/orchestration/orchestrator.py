@@ -10,6 +10,7 @@
 LLM 与图客户端均注入（测试用替身；生产为 openai 客户端与 memory server HTTP）。
 """
 
+import inspect
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple
 
@@ -309,7 +310,7 @@ class Orchestrator:
         if request.idempotency_key in self._research_written:
             # 同一幂等键：结论已经在图里，只复用文本，不重复写 Fact
             return self._format_evidence(result)
-        note = self.graph.role_note(
+        note = self._role_note_with_provenance(
             "research",
             "fact",
             result.answer,
@@ -318,12 +319,29 @@ class Orchestrator:
                 f"stop={result.stop_reason or 'unknown'}"
             ),
             evidence=result.evidence_json(),
+            source=",".join(item.source for item in result.evidence[:3]),
+            confidence=result.confidence,
         )
         self._research_written.add(request.idempotency_key)
         node_id = (note or {}).get("node_id", "") if isinstance(note, dict) else ""
         if node_id:
             trace.fact_ids.append(node_id)
         return self._format_evidence(result)
+
+    def _role_note_with_provenance(self, role, kind, content, *, reason, evidence,
+                                   source="", confidence=0.0):
+        """图客户端支持 provenance 字段就带上；老实现（只认 reason/evidence）照旧可用。"""
+        fn = self.graph.role_note
+        try:
+            params = inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            params = {}
+        extra = {}
+        if "source" in params:
+            extra["source"] = source
+        if "confidence" in params:
+            extra["confidence"] = float(confidence or 0.0)
+        return fn(role, kind, content, reason=reason, evidence=evidence, **extra)
 
     @staticmethod
     def _format_evidence(result: ResearchResult) -> str:
