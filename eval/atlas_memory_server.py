@@ -143,6 +143,39 @@ app = FastAPI(title="Atlas Memory Server (long_context + atlas)")
 SYSTEMS: Dict[str, object] = {}
 
 
+# ---------- 旁路镜像（阶段 E）：ATLAS_DB_PATH 设置时把内存图同步进库 ----------
+
+DB_PATH = os.environ.get("ATLAS_DB_PATH", "").strip()
+_REPOSITORY = None
+MIRROR_ERRORS: list = []
+
+
+def _repository():
+    global _REPOSITORY
+    if not DB_PATH:
+        return None
+    if _REPOSITORY is None:
+        from atlas.storage.repository import GraphRepository, open_database
+
+        _REPOSITORY = GraphRepository(open_database(DB_PATH))
+    return _REPOSITORY
+
+
+def _mirror(system) -> None:
+    """评测逻辑不动：镜像失败只记日志，绝不打断跑分。"""
+    repo = _repository()
+    engine = getattr(system, "engine", None)
+    if repo is None or engine is None:
+        return
+    session_id = getattr(system, "user_id", "unknown")
+    try:
+        if repo.get_session(session_id) is None:
+            repo.create_session(session_id, goal="(evaluation session)")
+        repo.import_engine(session_id, engine)
+    except Exception as e:  # noqa: BLE001
+        MIRROR_ERRORS.append(f"{type(e).__name__}: {e}")
+
+
 def _get(user_id: str):
     system = SYSTEMS.get(user_id)
     if system is None:
@@ -183,7 +216,9 @@ def initialize(req: InitializeRequest):
 
 @app.post("/memory/add")
 def add(req: AddRequest):
-    _get(req.user_id).add_chunk(req.chunk)
+    system = _get(req.user_id)
+    system.add_chunk(req.chunk)
+    _mirror(system)
     return {"status": "ok"}
 
 
@@ -191,6 +226,7 @@ def add(req: AddRequest):
 def wrap(req: WrapRequest):
     system = _get(req.user_id)
     prompt = system.wrap_user_prompt(req.question)
+    _mirror(system)
     _flush_events(system)
     return {"prompt": prompt}
 
@@ -225,7 +261,10 @@ def state_view(req: StateViewRequest):
 def role_note(req: RoleNoteRequest):
     """编排角色写共享图：结论/疑虑落成节点，actor 标记角色。"""
     try:
-        return _current_atlas().role_note(req.role, req.kind, req.content, req.reason, req.evidence)
+        system = _current_atlas()
+        note = system.role_note(req.role, req.kind, req.content, req.reason, req.evidence)
+        _mirror(system)
+        return note
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

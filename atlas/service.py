@@ -315,6 +315,26 @@ class ServiceRuntime:
             context_digest_version=digest,
         )
 
+    def state_view(self) -> dict:
+        """状态视图：状态机 + 图 + 最近 checkpoint（API 与 trace 共用）。"""
+        row = self.repository.latest_checkpoint(self.session_id)
+        return {
+            "state": self.machine.state.value if self.machine is not None else "unknown",
+            "graph_version": len(self.repository.nodes(self.session_id)),
+            "checkpoint": (
+                {
+                    "task_state": row.task_state,
+                    "graph_version": row.graph_version,
+                    "pending_role": row.pending_role,
+                    "retry_count": row.retry_count,
+                    "context_digest_version": row.context_digest_version,
+                    "created_at": row.created_at,
+                }
+                if row is not None
+                else None
+            ),
+        }
+
     def resume(self) -> dict:
         """从最新 checkpoint 恢复：图重建 + 待执行角色/状态/版本。"""
         row = self.repository.latest_checkpoint(self.session_id)

@@ -387,6 +387,128 @@ class GraphRepository:
             session.flush()
             return row
 
+    # ---------- 幂等请求（API 层用） ----------
+
+    def get_idempotent_result(
+        self, session_id: str, idempotency_key: str
+    ) -> Optional[Dict[str, Any]]:
+        """同一幂等键已处理过就返回原结果（跨进程有效，因为落在事件表里）。"""
+        if not idempotency_key:
+            return None
+        with self._tx() as session:
+            event = session.scalar(
+                select(EventRow).where(
+                    EventRow.session_id == session_id,
+                    EventRow.idempotency_key == idempotency_key,
+                )
+            )
+            if event is None:
+                return None
+            return (event.payload or {}).get("result")
+
+    def record_idempotent_result(
+        self,
+        session_id: str,
+        idempotency_key: str,
+        operation: str,
+        result: Dict[str, Any],
+        actor: str = "api",
+    ) -> Dict[str, Any]:
+        """把一次 API 结果绑定到幂等键；已存在则返回原结果，不重复写事件。"""
+        if not idempotency_key:
+            return result
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            existing = session.scalar(
+                select(EventRow).where(
+                    EventRow.session_id == session_id,
+                    EventRow.idempotency_key == idempotency_key,
+                )
+            )
+            if existing is not None:
+                return (existing.payload or {}).get("result", result)
+            self._emit_event(
+                session,
+                session_id,
+                operation,
+                actor,
+                {"result": result},
+                idempotency_key=idempotency_key,
+            )
+            return result
+
+    # ---------- trace（API 用） ----------
+
+    def record_trace(self, session_id: str, payload: Dict[str, Any], actor: str = "tracer") -> EventRow:
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            return self._emit_event(session, session_id, "trace", actor, payload)
+
+    def traces(self, session_id: str) -> List[Dict[str, Any]]:
+        with self._tx() as session:
+            rows = session.scalars(
+                select(EventRow)
+                .where(EventRow.session_id == session_id, EventRow.operation == "trace")
+                .order_by(EventRow.seq)
+            ).all()
+            return [dict(row.payload or {}) for row in rows]
+
+    # ---------- 镜像（评测接入用） ----------
+
+    def import_engine(self, session_id: str, engine) -> Dict[str, int]:
+        """把内存引擎的整张图幂等镜像进库（保留原节点 id 与生命周期）。
+
+        评测记忆服务仍是内存引擎 + JSONL 跑分；这里只做旁路镜像，好让 API / trace
+        能查同一批会话。已存在的节点/边直接跳过，重复调用不产生重复行。
+        """
+        inserted_nodes = 0
+        inserted_edges = 0
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            for node in sorted(engine.nodes.values(), key=lambda n: n.id):
+                if session.get(NodeRow, (session_id, node.id)) is not None:
+                    continue
+                session.add(
+                    NodeRow(
+                        session_id=session_id,
+                        node_id=node.id,
+                        type=node.type.value,
+                        content=node.content,
+                        actor=node.actor,
+                        status=node.status.value,
+                        superseded_by=node.superseded_by,
+                        note=node.note,
+                        reason=node.reason,
+                        evidence=node.evidence,
+                        source=node.source,
+                        confidence=float(node.confidence or 0.0),
+                        valid_from=node.valid_from,
+                        valid_until=node.valid_until,
+                        verified_at=node.verified_at,
+                        meta=node.meta or {},
+                        seq=self._next_seq(session, session_id),
+                        created_at=node.created_at or _now(),
+                    )
+                )
+                session.flush()
+                inserted_nodes += 1
+            for edge in engine.edges:
+                if self._find_edge(session, session_id, edge.src, edge.dst, edge.type) is not None:
+                    continue
+                session.add(
+                    EdgeRow(
+                        session_id=session_id,
+                        src=edge.src,
+                        dst=edge.dst,
+                        type=edge.type.value,
+                        created_at=edge.created_at or _now(),
+                    )
+                )
+                session.flush()
+                inserted_edges += 1
+            self._bump_version(session, session_id)
+        return {"nodes": inserted_nodes, "edges": inserted_edges}
+
     # ---------- 重建 ----------
 
     def rebuild_engine(self, session_id: str) -> GraphMemoryEngine:
