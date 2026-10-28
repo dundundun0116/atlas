@@ -111,6 +111,8 @@
 
 ## 11. 进展记录（每完成一个工作单元实时更新）
 
+- **2026-10-28 · 完整 Agent 封装路线明确**：新增 `docs/COMPASSRAG_AGENT_UPGRADE_PLAN.md`，明确 CompassRAG 作为 Atlas 的 ResearchTool，补齐工具协议、证据闭环、LangGraph 控制流、trace/replay、服务化 adapter 与评测验收边界。
+
 - **2026-10-03 · S1 地基完成**（commits `dc610c7..cc172f6`，测试 33/33）
   - `llm/` 客户端 + 逐调用 token 遥测（chat / embed，失败也记录）；三基准接入与归一化——实数核对通过（HotpotQA 7405 / 2Wiki 12576 / MuSiQue 2417 answerable）；分层抽样 300×3（seed=42，两遍输出哈希一致，清单 + manifest 入仓）；全量 distractor 语料 **146,574 块 / ≈1750 万 token**（hotpotqa 66946 / 2wiki 58510 / musique 21118）。
   - fresh review（独立审查 agent）：1 Critical + 3 Important 当场修复（语料目录按模式编码防覆盖；块上移除 `is_supporting`——证据归属改评测期按题 join；下载产物解析校验；失败调用遥测），9 项 minor 缓办记账（`.superpowers/sdd/PROJECT.md/progress.md`）。
