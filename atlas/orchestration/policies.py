@@ -10,7 +10,7 @@
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, Optional, Sequence
 from uuid import uuid4
 
 #: Auditor 允许的三种结论。
@@ -46,6 +46,73 @@ class CallResult:
     request_id: str = ""
     error: str = ""
     fallback_used: bool = False
+
+
+class BudgetExhausted(RuntimeError):
+    """统一预算触顶：`reason` 说明是轮数、token、延迟、费用还是修订次数。"""
+
+    def __init__(self, reason: str):
+        super().__init__(f"budget_exhausted: {reason}")
+        self.reason = reason
+
+
+@dataclass
+class Budget:
+    """一次任务的统一预算：修订次数、轮数、token、延迟、费用。
+
+    只有"运行时真的知道"的量才计费：
+    - 轮数与延迟由编排器实测；
+    - token/费用由调用方提供 usage（没有就记为 0，不估算成假数字）。
+    """
+
+    max_repairs: int = 1
+    max_rounds: int = 8
+    max_tokens: int = 20000
+    max_latency_ms: float = 600000.0
+    max_cost_usd: float = 0.5
+    rounds: int = 0
+    repairs: int = 0
+    tokens: int = 0
+    latency_ms: float = 0.0
+    cost_usd: float = 0.0
+
+    def charge(self, *, rounds: int = 0, tokens: int = 0,
+               latency_ms: float = 0.0, cost_usd: float = 0.0) -> None:
+        self.rounds += int(rounds)
+        self.tokens += int(tokens)
+        self.latency_ms += float(latency_ms)
+        self.cost_usd += float(cost_usd)
+        self.check()
+
+    def spend_repair(self) -> None:
+        self.repairs += 1
+
+    def exhausted(self) -> Optional[str]:
+        if self.rounds > self.max_rounds:
+            return f"rounds {self.rounds} > {self.max_rounds}"
+        if self.tokens > self.max_tokens:
+            return f"tokens {self.tokens} > {self.max_tokens}"
+        if self.latency_ms > self.max_latency_ms:
+            return f"latency {self.latency_ms:.0f}ms > {self.max_latency_ms:.0f}ms"
+        if self.cost_usd > self.max_cost_usd:
+            return f"cost {self.cost_usd:.4f} > {self.max_cost_usd:.4f}"
+        if self.repairs > self.max_repairs:
+            return f"repairs {self.repairs} > {self.max_repairs}"
+        return None
+
+    def check(self) -> None:
+        reason = self.exhausted()
+        if reason:
+            raise BudgetExhausted(reason)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "rounds": self.rounds, "max_rounds": self.max_rounds,
+            "tokens": self.tokens, "max_tokens": self.max_tokens,
+            "latency_ms": round(self.latency_ms, 2), "max_latency_ms": self.max_latency_ms,
+            "cost_usd": round(self.cost_usd, 6), "max_cost_usd": self.max_cost_usd,
+            "repairs": self.repairs, "max_repairs": self.max_repairs,
+        }
 
 
 #: 角色默认预算：解题的 Worker 给更多次；机械性 JSON 调用（Planner/Auditor）少而快。
@@ -132,3 +199,16 @@ def validate_audit(outcome: str, references: Sequence[str] = ()) -> str:
 
 def policy_for(role: str) -> RetryPolicy:
     return ROLE_POLICIES.get(role, RetryPolicy())
+
+
+def validate_audit_refs(outcome: str, references: Sequence[str],
+                        known_ids: Optional[Iterable[str]] = None) -> str:
+    """结论引用必须指向**真实存在**的节点或证据（Task 2）。"""
+    validate_audit(outcome, references)
+    if known_ids is None:
+        return outcome
+    known = set(known_ids)
+    unknown = [ref for ref in references if ref not in known]
+    if unknown:
+        raise ValueError(f"Auditor 引用了不存在的节点：{unknown}")
+    return outcome

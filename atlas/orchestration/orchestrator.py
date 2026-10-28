@@ -11,11 +11,17 @@ LLM 与图客户端均注入（测试用替身；生产为 openai 客户端与 m
 """
 
 import inspect
+import time
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple
 
 from atlas.context.extractor import parse_json_object
-from atlas.orchestration.policies import normalize_audit_outcome, validate_audit
+from atlas.orchestration.policies import (
+    Budget,
+    BudgetExhausted,
+    normalize_audit_outcome,
+    validate_audit_refs,
+)
 from atlas.tools.compassrag import describe_failure
 from atlas.tools.protocol import ResearchRequest, ResearchResult, ResearchToolError
 from atlas.orchestration.state_machine import IllegalTransition, TaskStateMachine
@@ -124,7 +130,8 @@ class Orchestrator:
                  machine: Optional[TaskStateMachine] = None,
                  research_tool=None,
                  research_budget_tokens: int = 4000,
-                 research_max_rounds: int = 2):
+                 research_max_rounds: int = 2,
+                 budget: Optional[Budget] = None):
         self.llm = llm
         self.llm_no_think = llm_no_think or llm
         self.graph = graph
@@ -134,6 +141,8 @@ class Orchestrator:
         self.research_max_rounds = research_max_rounds
         self._research_cache: dict = {}
         self._research_written: set = set()
+        # 统一预算：轮数 / token / 延迟 / 费用（修订次数由状态机读同一个预算）
+        self.budget = budget
         # 可选：显式状态机。给了就按合法转移推进，任何失败都收敛到 FAILED 并留原因。
         self.machine = machine
 
@@ -144,6 +153,9 @@ class Orchestrator:
                 problem, session_id=session_id, subtask_id=subtask_id,
                 research_query=research_query,
             )
+        except BudgetExhausted as e:
+            self._transition("fail", str(e))
+            raise OrchestrationError(str(e)) from e
         except OrchestrationError as e:
             self._transition("fail", str(e))
             raise
@@ -163,11 +175,13 @@ class Orchestrator:
         trace = OrchestrationTrace()
 
         # 1) Planner：定路线 → 写 Decision（actor=planner）
+        started = time.perf_counter()
         plan = self._call_json(
             PLANNER_PROMPT.format(state_view=self.graph.state_view("planner"), problem=problem),
             "planner",
             llm=self.llm_no_think,
         )
+        self._charge(started)
         trace.calls.append("planner")
         route = str(plan.get("route") or "").strip()
         if not route:
@@ -187,10 +201,12 @@ class Orchestrator:
         worker_problem = problem if not evidence_block else f"{problem}\n\n{evidence_block}"
 
         # 2) Worker：按路线解题 → 写 Artifact 草稿
+        started = time.perf_counter()
         draft = self._call(
             WORKER_PROMPT.format(state_view=self.graph.state_view("worker"), problem=worker_problem, route=route),
             "worker",
         ).strip()
+        self._charge(started)
         trace.calls.append("worker")
         if not draft:
             raise OrchestrationError("worker 无输出")
@@ -199,6 +215,7 @@ class Orchestrator:
         self._transition("work_done", "worker 草稿完成")
 
         # 3) Auditor：核验草稿 → 问题写 Fact（actor=auditor）
+        started = time.perf_counter()
         audit = self._call_json(
             AUDITOR_PROMPT.format(
                 state_view=self.graph.state_view("auditor"), problem=problem, draft=draft
@@ -206,6 +223,7 @@ class Orchestrator:
             "auditor",
             llm=self.llm_no_think,
         )
+        self._charge(started)
         trace.calls.append("auditor")
         verdict = str(audit.get("verdict") or "").strip().lower()
         issues = str(audit.get("issues") or "").strip()
@@ -219,7 +237,7 @@ class Orchestrator:
         refs = [str(r).strip() for r in (audit.get("refs") or []) if str(r).strip()]
         if refs:
             try:
-                validate_audit(outcome, refs)
+                validate_audit_refs(outcome, refs, self._known_ids())
             except ValueError as e:
                 raise OrchestrationError(f"auditor 结论不合法：{e}") from e
         if outcome == "fatal":
@@ -327,6 +345,26 @@ class Orchestrator:
         if node_id:
             trace.fact_ids.append(node_id)
         return self._format_evidence(result)
+
+    def _charge(self, started: float, tokens: int = 0) -> None:
+        """每轮调用后计入统一预算；触顶抛 BudgetExhausted。"""
+        if self.budget is None:
+            return
+        self.budget.charge(
+            rounds=1,
+            tokens=tokens,
+            latency_ms=(time.perf_counter() - started) * 1000.0,
+        )
+
+    def _known_ids(self):
+        """图客户端能给出真实节点 id 时返回集合，否则返回 None（宽松模式）。"""
+        getter = getattr(self.graph, "known_ids", None)
+        if not callable(getter):
+            return None
+        try:
+            return set(getter())
+        except Exception:  # noqa: BLE001 - 拿不到就退回宽松模式
+            return None
 
     def _role_note_with_provenance(self, role, kind, content, *, reason, evidence,
                                    source="", confidence=0.0):

@@ -432,3 +432,93 @@ class TestAuditorReferences:
         llm = ScriptedLLM([PLAN, "草稿解答", audit_with_refs])
         Orchestrator(llm, graph, machine=machine).solve("题目：给出上界")
         assert machine.state == TaskState.COMPLETED
+
+
+class TestUnifiedBudget:
+    """Task 2：修订次数 / 轮数 / token / 延迟 / 费用进同一个预算。"""
+
+    def test_budget_tracks_all_five_dimensions(self):
+        from atlas.orchestration.policies import Budget
+
+        budget = Budget(max_rounds=3, max_tokens=1000, max_latency_ms=500,
+                        max_cost_usd=0.1, max_repairs=1)
+        budget.charge(rounds=1, tokens=400, latency_ms=100, cost_usd=0.02)
+        budget.spend_repair()
+        assert budget.to_dict()["rounds"] == 1
+        assert budget.exhausted() is None
+        with pytest.raises(Exception):
+            budget.charge(tokens=700)  # 超 token
+        assert "tokens" in str(budget.exhausted())
+
+    def test_repair_limit_comes_from_budget(self):
+        from atlas.orchestration.policies import Budget
+
+        machine = TaskStateMachine(budget=Budget(max_repairs=0))
+        machine.apply("plan_ready")
+        machine.apply("work_done")
+        machine.apply("audit_repair", reason="第一次打回")
+        assert machine.state == TaskState.FAILED
+        assert "repair_budget_exhausted" in (machine.failure_reason or "")
+
+    def test_repair_count_mirrors_into_budget(self):
+        from atlas.orchestration.policies import Budget
+
+        budget = Budget(max_repairs=2)
+        machine = TaskStateMachine(budget=budget)
+        machine.apply("plan_ready")
+        machine.apply("work_done")
+        machine.apply("audit_repair", reason="打回")
+        assert budget.repairs == 1
+        assert machine.repairs == 1
+
+    def test_latency_exhaustion_fails_task_predictably(self):
+        from atlas.orchestration.policies import Budget
+
+        machine = TaskStateMachine(budget=Budget(max_latency_ms=0.0))
+        graph = FakeGraph()
+        llm = ScriptedLLM([PLAN, "草稿解答", AUDIT_OK])
+        orchestrator = Orchestrator(llm, graph, machine=machine, budget=machine.budget)
+        with pytest.raises(OrchestrationError) as excinfo:
+            orchestrator.solve("题目：给出上界")
+        assert "budget_exhausted" in str(excinfo.value)
+        assert machine.state == TaskState.FAILED
+        assert "latency" in (machine.failure_reason or "")
+
+
+class TestAuditorRefsMustExist:
+    """Task 2：Auditor 引用必须指向真实节点或证据。"""
+
+    def test_unknown_ref_is_rejected(self):
+        class GraphWithIds(FakeGraph):
+            def known_ids(self):
+                return {"C1", "D1"}
+
+        machine = TaskStateMachine()
+        audit = json.dumps({"verdict": "pass", "issues": "", "refs": ["F9"]})
+        orchestrator = Orchestrator(
+            ScriptedLLM([PLAN, "草稿解答", audit]), GraphWithIds(), machine=machine
+        )
+        with pytest.raises(OrchestrationError) as excinfo:
+            orchestrator.solve("题目：给出上界")
+        assert "F9" in str(excinfo.value)
+        assert machine.state == TaskState.FAILED
+
+    def test_known_ref_passes(self):
+        class GraphWithIds(FakeGraph):
+            def known_ids(self):
+                return {"C1", "D1"}
+
+        machine = TaskStateMachine()
+        audit = json.dumps({"verdict": "pass", "issues": "", "refs": ["C1"]})
+        answer, _ = Orchestrator(
+            ScriptedLLM([PLAN, "草稿解答", audit]), GraphWithIds(), machine=machine
+        ).solve("题目：给出上界")
+        assert answer == "草稿解答"
+        assert machine.state == TaskState.COMPLETED
+
+    def test_graph_without_known_ids_keeps_loose_mode(self):
+        machine = TaskStateMachine()
+        audit = json.dumps({"verdict": "pass", "issues": "", "refs": ["whatever"]})
+        Orchestrator(ScriptedLLM([PLAN, "草稿解答", audit]), FakeGraph(),
+                     machine=machine).solve("题目：给出上界")
+        assert machine.state == TaskState.COMPLETED

@@ -102,6 +102,7 @@ class TaskStateMachine:
         max_repairs: int = 1,
         audit_hook: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         checkpoint_sink: Optional[Callable[[Dict[str, Any]], None]] = None,
+        budget=None,
     ):
         if max_repairs < 0:
             raise ValueError("max_repairs 不能为负")
@@ -112,6 +113,7 @@ class TaskStateMachine:
         self._paused_from: Optional[TaskState] = None
         self.history: List[TransitionRecord] = []
         self.violations: List[Dict[str, Any]] = []
+        self.budget = budget
         self._audit_hook = audit_hook
         # 每次成功转移后回调一次快照：用于"转移即落 checkpoint"（阶段 C）
         self._checkpoint_sink = checkpoint_sink
@@ -155,15 +157,18 @@ class TaskStateMachine:
             self.record_violation(trigger, reason)
             raise
         if trigger == "audit_repair":
-            if self.repairs >= self.max_repairs:
+            limit = self.budget.max_repairs if self.budget is not None else self.max_repairs
+            if self.repairs >= limit:
                 # 预算用尽：不再进入 REPAIRING，直接收敛到 FAILED 并留原因
                 target = TaskState.FAILED
                 reason = (
                     f"repair_budget_exhausted: 已修订 {self.repairs} 次，"
-                    f"上限 {self.max_repairs}；{reason}"
+                    f"上限 {limit}；{reason}"
                 ).strip()
             else:
                 self.repairs += 1
+                if self.budget is not None:
+                    self.budget.spend_repair()
         if trigger == "pause":
             self._paused_from = self.state
         elif trigger == "resume":

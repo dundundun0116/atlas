@@ -42,6 +42,12 @@ class CreateTaskRequest(RequestMeta):
         return text
 
 
+class PauseRequest(RequestMeta):
+    """暂停：等待外部输入 / 预算补充 / 人工处理。"""
+
+    reason: str = ""
+
+
 class AdvanceRequest(RequestMeta):
     trigger: str = Field(min_length=1, description="状态机触发词，如 plan_ready / work_done / audit_pass")
     reason: str = ""
