@@ -18,7 +18,7 @@ if _ROOT not in sys.path:
 import requests  # noqa: E402
 
 from agent.math import MathAgent  # noqa: E402
-from atlas.orchestration import WORKER_FALLBACK_PROMPT, Orchestrator  # noqa: E402
+from atlas.orchestration import WORKER_FALLBACK_PROMPT, Orchestrator, TaskStateMachine  # noqa: E402
 
 WORKER_MAX_TOKENS = int(os.getenv("ATLAS_WORKER_MAX_TOKENS", "24000"))  # 解题（含推理）预算
 JSON_MAX_TOKENS = int(os.getenv("ATLAS_ROLE_JSON_MAX_TOKENS", "4000"))  # 机械性 JSON 调用预算
@@ -85,9 +85,14 @@ class OrchestratedMathAgent(MathAgent):
         problem = prompt.split("\nUser: ", 1)[1] if "\nUser: " in prompt else prompt
         graph = MemoryServerGraphClient(self.memory_url)
         trace = None
+        # 阶段 5：每个子任务一个显式状态机，终态随 trace 落盘（可审计、可回放）
+        machine = TaskStateMachine()
         try:
             orchestrator = Orchestrator(
-                self._solve_llm, graph, llm_no_think=lambda p: self._llm(p, think=False)
+                self._solve_llm,
+                graph,
+                llm_no_think=lambda p: self._llm(p, think=False),
+                machine=machine,
             )
             answer, trace = orchestrator.solve(problem)
         except Exception as e:
@@ -101,7 +106,7 @@ class OrchestratedMathAgent(MathAgent):
             return super().act(prompt)
         calls = list(trace.calls) if trace is not None else ["single_shot"]
         # tool_info 保持紧凑（完整角色输出在图里）：只记调用序列，供提取器与事后审计
-        trace_info = [{"tool": "orchestration", "calls": calls}]
+        trace_info = [{"tool": "orchestration", "calls": calls, "task_state": machine.state.value}]
         return {
             "type": "final",
             "answer": answer,

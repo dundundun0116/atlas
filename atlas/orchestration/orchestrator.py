@@ -11,9 +11,11 @@ LLM 与图客户端均注入（测试用替身；生产为 openai 客户端与 m
 """
 
 from dataclasses import dataclass, field
-from typing import Callable, List, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from atlas.context.extractor import parse_json_object
+from atlas.orchestration.policies import normalize_audit_outcome, validate_audit
+from atlas.orchestration.state_machine import IllegalTransition, TaskStateMachine
 
 PLANNER_PROMPT = """You are the PLANNER in a multi-agent math solving system. You coordinate with the
 other roles ONLY through the shared state graph shown below (no direct messages).
@@ -58,7 +60,8 @@ other roles ONLY through the shared state graph shown below.
 
 Check the draft against the active constraints and decisions in the graph, and check the math itself.
 Output strict JSON only:
-{{"verdict": "ok" or "revise", "issues": "<specific, actionable issues; empty when ok>"}}"""
+{{"verdict": "ok" or "revise" or "fatal", "issues": "<specific, actionable issues; empty when ok>",
+ "refs": ["<node ids you relied on, e.g. C1/D2>"]}}"""
 
 REVISER_PROMPT = """You are the WORKER revising your draft after the AUDITOR's review.
 
@@ -106,12 +109,32 @@ class Orchestrator:
     """
 
     def __init__(self, llm: Callable[[str], str], graph,
-                 llm_no_think: Callable[[str], str] = None):
+                 llm_no_think: Callable[[str], str] = None,
+                 machine: Optional[TaskStateMachine] = None):
         self.llm = llm
         self.llm_no_think = llm_no_think or llm
         self.graph = graph
+        # 可选：显式状态机。给了就按合法转移推进，任何失败都收敛到 FAILED 并留原因。
+        self.machine = machine
 
     def solve(self, problem: str) -> Tuple[str, OrchestrationTrace]:
+        try:
+            return self._solve(problem)
+        except OrchestrationError as e:
+            self._transition("fail", str(e))
+            raise
+
+    def _transition(self, trigger: str, reason: str = "") -> None:
+        """推进状态机；未注入状态机时是 no-op。"""
+        if self.machine is None:
+            return
+        try:
+            self.machine.apply(trigger, reason=reason)
+        except IllegalTransition:
+            if not self.machine.is_terminal:
+                raise
+
+    def _solve(self, problem: str) -> Tuple[str, OrchestrationTrace]:
         trace = OrchestrationTrace()
 
         # 1) Planner：定路线 → 写 Decision（actor=planner）
@@ -130,6 +153,7 @@ class Orchestrator:
             reason=str(plan.get("reason") or "").strip() or "planner 路线选择",
             evidence=str(plan.get("risks") or "").strip(),
         )
+        self._transition("plan_ready", f"planner 路线：{route}")
 
         # 2) Worker：按路线解题 → 写 Artifact 草稿
         draft = self._call(
@@ -141,6 +165,7 @@ class Orchestrator:
             raise OrchestrationError("worker 无输出")
         trace.draft = draft
         self.graph.role_note("worker", "artifact", draft)
+        self._transition("work_done", "worker 草稿完成")
 
         # 3) Auditor：核验草稿 → 问题写 Fact（actor=auditor）
         audit = self._call_json(
@@ -155,6 +180,24 @@ class Orchestrator:
         issues = str(audit.get("issues") or "").strip()
         trace.verdict = verdict
         trace.issues = issues
+        try:
+            outcome = normalize_audit_outcome(verdict)
+        except ValueError:
+            outcome = "repair_required"  # 认不出的结论按"需修订"处理，不当作通过
+        # 给了引用就按"结论必须引用节点或证据"校验；没给则保留宽松模式（阶段 7 收紧）
+        refs = [str(r).strip() for r in (audit.get("refs") or []) if str(r).strip()]
+        if refs:
+            try:
+                validate_audit(outcome, refs)
+            except ValueError as e:
+                raise OrchestrationError(f"auditor 结论不合法：{e}") from e
+        if outcome == "fatal":
+            self._transition("audit_fatal", issues or "auditor 判 fatal")
+            raise OrchestrationError(f"auditor 判 fatal：{issues or '无误导原因'}")
+        if outcome == "repair_required" and issues:
+            self._transition("audit_repair", issues)
+        elif outcome == "pass":
+            self._transition("audit_pass", "auditor 核验通过")
 
         # 4) 仅当 Auditor 判"需修订"：Worker 修订一次（作废草稿、原因入图）
         if verdict == "revise" and issues:
@@ -171,10 +214,14 @@ class Orchestrator:
                 ).strip()
             except OrchestrationError:
                 revised = ""  # 修订失败：保留草稿（auditor 的疑虑已在图里）
+                self._transition("repair_done", "修订失败，保留草稿")
+                self._transition("audit_pass", "降级交付草稿")
             trace.calls.append("worker_revise")
             if revised:
                 trace.final = revised
                 self.graph.role_note("worker", "artifact_revise", revised, reason=issues)
+                self._transition("repair_done", "修订稿完成")
+                self._transition("audit_pass", "修订后交付")
                 return revised, trace
 
         trace.final = draft

@@ -13,6 +13,7 @@
 保证评测跑不因单点异常中断；明细留服务日志供事后审计。
 """
 
+import json
 import os
 import re
 from typing import Callable, List, Optional, Sequence
@@ -22,6 +23,7 @@ from atlas.context.carryover import CarryOverManager
 from atlas.context.extractor import LLMCarryOverExtractor
 from atlas.memory.engine import GraphMemoryEngine
 from atlas.memory.schema import NodeStatus, NodeType
+from atlas.orchestration.state_machine import TaskStateMachine
 
 DEFAULT_BUDGET_TOKENS = 8000  # 上下文组装总预算
 _SUBTASK_CONTENT_LIMIT = 1000
@@ -226,10 +228,12 @@ class ServiceRuntime:
         "fact": NodeType.FACT,
     }
 
-    def __init__(self, repository, session_id: str, goal: Optional[str] = None, actor: str = "main"):
+    def __init__(self, repository, session_id: str, goal: Optional[str] = None,
+                 actor: str = "main", machine: Optional[TaskStateMachine] = None):
         self.repository = repository
         self.session_id = session_id
         self.actor = actor
+        self.machine = machine
         if goal is not None:
             self.repository.create_session(session_id, goal=goal, actor=actor)
         self.engine = self.repository.rebuild_engine(session_id)
@@ -283,23 +287,37 @@ class ServiceRuntime:
     def checkpoint(
         self,
         pending_role: str,
-        task_state: str = "running",
+        task_state: Optional[str] = None,
         retry_count: int = 0,
         context_digest_version: str = "",
     ):
+        """存检查点；给了状态机就自动带上它的状态与快照。"""
+        resolved_state = task_state or (
+            self.machine.state.value if self.machine is not None else "running"
+        )
+        digest = context_digest_version
+        if self.machine is not None and not digest:
+            digest = json.dumps(self.machine.to_checkpoint(), ensure_ascii=False)
         return self.repository.save_checkpoint(
             self.session_id,
-            task_state=task_state,
+            task_state=resolved_state,
             graph_version=len(self.repository.nodes(self.session_id)),
             pending_role=pending_role,
             retry_count=retry_count,
-            context_digest_version=context_digest_version,
+            context_digest_version=digest,
         )
 
     def resume(self) -> dict:
         """从最新 checkpoint 恢复：图重建 + 待执行角色/状态/版本。"""
         row = self.repository.latest_checkpoint(self.session_id)
         self.engine = self.repository.rebuild_engine(self.session_id)
+        if row is not None and row.context_digest_version:
+            try:
+                self.machine = TaskStateMachine.from_checkpoint(
+                    json.loads(row.context_digest_version)
+                )
+            except (ValueError, TypeError):
+                pass  # 摘要版本不是状态机快照：保持原样，不猜
         if row is None:
             return {
                 "task_state": "new",
