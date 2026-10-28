@@ -119,10 +119,14 @@ class ScriptedResearcher:
         self.fixture = fixture
 
     def answer(self, subtask: Subtask, context: str) -> Dict[str, Any]:
+        """只依据上下文作答：看不见证据就答"无法确定"。
+
+        这一条是整个离线 harness 的可信基础——脚本化研究者不能"自带答案"，
+        否则它测的是 fixture，不是记忆策略。
+        """
         lines: List[str] = []
         violation = False
         stale_misuse = False
-        has_earlier = (not subtask.needs_earlier_fact) or (subtask.needs_earlier_fact in context)
         constraints_visible = all(c in context for c in self.fixture.constraints)
         if subtask.forbidden_method:
             if constraints_visible:
@@ -130,20 +134,23 @@ class ScriptedResearcher:
             else:
                 violation = True
                 lines.append(f"（{subtask.forbidden_method}）")
-        if has_earlier:
+
+        target = subtask.probe or subtask.required_fact
+        evidence_visible = contains_probe(context, target)
+        earlier_visible = (not subtask.needs_earlier_fact) or contains_probe(
+            context, subtask.needs_earlier_fact
+        )
+        if evidence_visible and earlier_visible:
             lines.append(subtask.required_fact)
-        else:
-            lines.append("无法确定：缺少前序结论")
-        # 误用判定：旧值出现在某一行、而那一行没有"作废/修订"标记
-        if subtask.stale_value and any(
-            subtask.stale_value in line and "作废" not in line
-            for line in context.splitlines()
-        ):
+            completed = True
+        elif subtask.stale_value and contains_probe(context, subtask.stale_value):
+            # 证据缺失但旧值可见：真实模型会拿旧值凑答案（这正是要测的失败模式）
             stale_misuse = True
             lines.append(f"采用旧值 {subtask.stale_value}")
-        completed = has_earlier and contains_probe(
-            "\n".join(lines), subtask.probe or subtask.required_fact
-        )
+            completed = False
+        else:
+            lines.append("无法确定：上下文缺少证据")
+            completed = False
         return {
             "answer": "\n".join(lines),
             "completed": completed,
@@ -156,7 +163,7 @@ class ModelResearcher:
     """真实模型研究者（Task 6）：把上下文喂给模型，用**输出内容**判定指标。
 
     判分口径（与脚本化研究者一致，便于对照）：
-    - 完成：回答里出现该子任务要求的结论；
+    - 完成：回答里出现该子任务的核心断言（`probe`）；
     - 违规：回答里出现被约束禁止的做法；
     - 过期误用：回答里出现旧值，且没有给出新值。
     模型异常/空响应按一次失败计，不重试（重试由上层策略决定，这里保持测量纯粹）。
@@ -179,7 +186,7 @@ class ModelResearcher:
             "直接给出结论（一句话）；若上下文信息不足，明确回答“无法确定”。"
         )
 
-    def answer(self, subtask: Subtask, context: str, subtask_id: str = "") -> Dict[str, Any]:
+    def answer(self, subtask: Subtask, context: str) -> Dict[str, Any]:
         self.calls += 1
         try:
             text = str(self.llm(self.build_prompt(subtask, context)) or "").strip()

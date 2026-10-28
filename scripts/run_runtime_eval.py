@@ -78,17 +78,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", default="", help="real 模式使用的模型名")
     parser.add_argument("--repeats", type=int, default=1, help="real 模式重复次数（简历数字必须>1）")
     parser.add_argument("--out", default="", help="结果目录（默认 runs/runtime_eval_<mode>）")
+    parser.add_argument("--families", default="",
+                        help="逗号分隔的 fixture 家族；空=默认三类（不含 long_horizon）")
     return parser
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    fixtures = load_fixtures()
+    families = tuple(f for f in args.families.split(",") if f.strip()) or None
+    fixtures = load_fixtures(families) if families else load_fixtures()
     policies = build_policies()
     config = {
         "mode": args.mode,
         "model": args.model or os.environ.get("ATLAS_EVAL_MODEL", ""),
         "fixtures": [f.family for f in fixtures],
+        "fixture_sizes": {f.family: len(f.subtasks) for f in fixtures},
         "policies": sorted(policies),
         "repeats": args.repeats,
         "honesty_note": (

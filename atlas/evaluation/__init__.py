@@ -1,6 +1,7 @@
 """阶段 F 离线评测：fixtures / 三种记忆策略 / harness / 指标 / replay。"""
 
 from atlas.evaluation.fixtures import (
+    DEFAULT_FAMILIES,
     FIXTURE_BUILDERS,
     POLICY_NAMES,
     Fixture,
@@ -34,6 +35,7 @@ from atlas.evaluation.policies import (
 from atlas.evaluation.replay import load_run, replay, replay_metrics, replay_table, save_run
 
 __all__ = [
+    "DEFAULT_FAMILIES",
     "FIXTURE_BUILDERS",
     "POLICY_NAMES",
     "REQUIRED_METRICS",

@@ -170,14 +170,55 @@ def needs_revision_fixture() -> Fixture:
     )
 
 
+def long_horizon_fixture(steps: int = 12) -> Fixture:
+    """长历史召回：12 个参数分散在 12 条证据里，逐条问回去。
+
+    这是"结构化记忆是否让上下文收敛"的判决实验：
+    - 全历史策略的上下文随步数线性增长；
+    - 图状态策略把事实沉淀进图、原始轨迹按预算裁剪；
+    - 摘要策略只留最近两条（且摘要里只有前两个参数的取值）→ 后半段必然丢值。
+    """
+    facts = [(f"k{i}", round(1 + i * 0.75, 2)) for i in range(1, steps + 1)]
+    seed_records = tuple(
+        f"fact: 参数 {key} = {value:g}（来源 附录 {index + 1}）"
+        for index, (key, value) in enumerate(facts)
+    )
+    seed_summaries = (
+        f"[证据] 参数 k1 = {facts[0][1]:g}、k2 = {facts[1][1]:g}，其余参数见附录",
+    )
+    subtasks = tuple(
+        Subtask(
+            subtask_id=f"S{index + 1}",
+            question=f"参数 {key} 的取值是多少？",
+            required_fact=f"参数 {key} = {value:g}",
+            probe=f"{value:g}",
+        )
+        for index, (key, value) in enumerate(facts)
+    )
+    return Fixture(
+        task_id=f"long-horizon-{steps}",
+        family="long_horizon",
+        goal="汇总附录里的全部参数取值",
+        constraints=("必须引用附录中的原值",),
+        seed_records=seed_records,
+        seed_summaries=seed_summaries,
+        subtasks=subtasks,
+    )
+
+
 FIXTURE_BUILDERS = {
     "multi_hop": multi_hop_fixture,
     "conflicting_sources": conflicting_sources_fixture,
     "needs_revision": needs_revision_fixture,
+    "long_horizon": long_horizon_fixture,
 }
 
 
-def load_fixtures(families: Tuple[str, ...] = tuple(FIXTURE_BUILDERS)) -> List[Fixture]:
+#: 默认对照集（不含 long_horizon：长任务单独跑，避免混进短任务的均值）
+DEFAULT_FAMILIES = ("multi_hop", "conflicting_sources", "needs_revision")
+
+
+def load_fixtures(families: Tuple[str, ...] = DEFAULT_FAMILIES) -> List[Fixture]:
     """按家族取 fixture；每个都会跑一遍结构校验。"""
     fixtures: List[Fixture] = []
     for family in families:

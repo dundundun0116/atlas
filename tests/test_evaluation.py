@@ -142,15 +142,16 @@ class TestFaultInjection:
         assert harness.state.records == records_after_first
 
     def test_stale_decision_fault_distinguishes_policies(self):
+        """有"作废"标记的策略不会误用旧值；只留旧摘要的策略会。"""
         fixture = load_fixtures(("conflicting_sources",))[0]
         full = ResearchHarness(fixture, build_policies()["full_history"]).run(
             Faults(stale_decision_at=0)
         )
-        graph = ResearchHarness(fixture, build_policies()["graph_state"]).run(
+        narrative = ResearchHarness(fixture, build_policies()["narrative_summary"]).run(
             Faults(stale_decision_at=0)
         )
-        assert full.steps[0].stale_misuse is True
-        assert graph.steps[0].stale_misuse is False
+        assert full.steps[0].stale_misuse is False   # 上下文里带"已作废"标记
+        assert narrative.steps[0].stale_misuse is True  # 摘要只剩旧值，分不清新旧
 
 
 class TestMetrics:
@@ -202,3 +203,36 @@ class TestReplay:
         path = save_run(tmp_path / "run3", config={}, runs=[run])
         failures = replay(path)["failures"]
         assert any(f["subtask_id"] == "S1" and f["stale_misuse"] for f in failures)
+
+
+class TestLongHorizon:
+    """长历史是"结构化记忆省 token"的判决场景（短任务上并不成立）。"""
+
+    def test_long_fixture_has_enough_steps_and_seeded_evidence(self):
+        from atlas.evaluation.fixtures import long_horizon_fixture
+
+        fixture = long_horizon_fixture(12)
+        fixture.validate()
+        assert len(fixture.subtasks) == 12
+        assert len(fixture.seed_records) == 12
+
+    def test_graph_state_scales_better_than_full_history(self):
+        from atlas.evaluation.fixtures import long_horizon_fixture
+
+        runs = {r.policy: r for r in run_matrix([long_horizon_fixture(24)], build_policies())}
+        full = runs["full_history"].context_tokens
+        graph = runs["graph_state"].context_tokens
+        assert full > 0 and graph > 0
+        assert graph < full * 0.9          # 24 步时图状态显著更低
+        assert runs["graph_state"].completed is True
+
+    def test_plan_zone_overflow_degrades_instead_of_crashing(self):
+        """40 步时计划区自身可能超预算：必须降级为计划区，而不是抛错。"""
+        from atlas.evaluation.fixtures import long_horizon_fixture
+        from atlas.evaluation.policies import GraphStatePolicy
+
+        fixture = long_horizon_fixture(40)
+        policy = GraphStatePolicy()
+        run = ResearchHarness(fixture, policy).run()
+        assert run.completed is True
+        assert policy.degraded_contexts > 0

@@ -10,7 +10,7 @@
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence
 
-from atlas.context.assembler import ContextAssembler
+from atlas.context.assembler import ContextAssembler, PlanZoneOverflow
 from atlas.memory.engine import GraphMemoryEngine
 from atlas.memory.schema import NodeType
 
@@ -87,6 +87,7 @@ class GraphStatePolicy(MemoryPolicy):
         self._seen_facts: set = set()
         self._seen_constraints: set = set()
         self._retired_values: set = set()
+        self.degraded_contexts: int = 0
 
     def absorb(self, state: MemoryState, record: str) -> None:
         """规则抽取（不调模型）：`fact:` / `constraint:` 入图；登记被作废的旧值。"""
@@ -125,7 +126,13 @@ class GraphStatePolicy(MemoryPolicy):
             line for line in state.summaries
             if not any(value in line for value in self._retired_values)
         ]
-        result = self.assembler.assemble(summaries, [], self.budget_tokens)
+        try:
+            result = self.assembler.assemble(summaries, [], self.budget_tokens)
+        except PlanZoneOverflow:
+            # 图大到计划区自身就超预算：退回"只有计划区"（与生产服务同一条降级路径），
+            # 保证长任务不崩；降级本身要留痕，别静默。
+            self.degraded_contexts += 1
+            return self.assembler.render_plan()
         return result.text
 
 
