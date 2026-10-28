@@ -50,6 +50,22 @@ class MemoryServerGraphClient:
         return resp.json()
 
 
+def research_tool_from_env():
+    """阶段 A：ATLAS_RESEARCH_URL 指向 CompassRAG 时才启用研究工具；否则纯 LLM 流程。"""
+    url = os.environ.get("ATLAS_RESEARCH_URL", "").strip()
+    if not url:
+        return None
+    try:
+        from atlas.tools import HttpCompassRAGTool
+
+        timeout_s = float(os.environ.get("ATLAS_RESEARCH_TIMEOUT", "30"))
+        print(f"[orchestration] 研究工具已启用：{url}", flush=True)
+        return HttpCompassRAGTool(url, timeout_s=timeout_s)
+    except Exception as e:
+        print(f"[orchestration] 研究工具初始化失败，退回纯 LLM：{type(e).__name__}: {e}", flush=True)
+        return None
+
+
 class OrchestratedMathAgent(MathAgent):
     """编排形态：act() 走 Planner → Worker → Auditor →（必要时）Worker 修订。
 
@@ -85,6 +101,8 @@ class OrchestratedMathAgent(MathAgent):
         problem = prompt.split("\nUser: ", 1)[1] if "\nUser: " in prompt else prompt
         graph = MemoryServerGraphClient(self.memory_url)
         trace = None
+        self._subtask_seq = getattr(self, "_subtask_seq", 0) + 1
+        subtask_id = f"S{self._subtask_seq}"
         # 阶段 5：每个子任务一个显式状态机，终态随 trace 落盘（可审计、可回放）
         machine = TaskStateMachine()
         try:
@@ -93,8 +111,13 @@ class OrchestratedMathAgent(MathAgent):
                 graph,
                 llm_no_think=lambda p: self._llm(p, think=False),
                 machine=machine,
+                research_tool=self._research_tool,
             )
-            answer, trace = orchestrator.solve(problem)
+            answer, trace = orchestrator.solve(
+                problem,
+                session_id=str(getattr(self, "user_id", "") or "session"),
+                subtask_id=subtask_id,
+            )
         except Exception as e:
             print(f"[orchestration] 编排失败，降级单发：{type(e).__name__}: {e}", flush=True)
             try:
@@ -106,7 +129,19 @@ class OrchestratedMathAgent(MathAgent):
             return super().act(prompt)
         calls = list(trace.calls) if trace is not None else ["single_shot"]
         # tool_info 保持紧凑（完整角色输出在图里）：只记调用序列，供提取器与事后审计
-        trace_info = [{"tool": "orchestration", "calls": calls, "task_state": machine.state.value}]
+        trace_info = [{
+            "tool": "orchestration",
+            "calls": calls,
+            "task_state": machine.state.value,
+            "research": {
+                "trace_id": trace.research_trace_id if trace is not None else "",
+                "rounds": trace.research_rounds if trace is not None else 0,
+                "stop_reason": trace.research_stop_reason if trace is not None else "",
+                "confidence": trace.research_confidence if trace is not None else 0.0,
+                "error": trace.research_error if trace is not None else None,
+                "fact_ids": list(trace.fact_ids) if trace is not None else [],
+            },
+        }]
         return {
             "type": "final",
             "answer": answer,

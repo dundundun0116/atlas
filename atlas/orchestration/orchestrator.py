@@ -15,6 +15,8 @@ from typing import Callable, List, Optional, Tuple
 
 from atlas.context.extractor import parse_json_object
 from atlas.orchestration.policies import normalize_audit_outcome, validate_audit
+from atlas.tools.compassrag import describe_failure
+from atlas.tools.protocol import ResearchRequest, ResearchResult, ResearchToolError
 from atlas.orchestration.state_machine import IllegalTransition, TaskStateMachine
 
 PLANNER_PROMPT = """You are the PLANNER in a multi-agent math solving system. You coordinate with the
@@ -98,6 +100,14 @@ class OrchestrationTrace:
     verdict: str = ""
     issues: str = ""
     final: str = ""
+    # 阶段 A：研究工具调用记录（失败也可审计，不写进图）
+    research_trace_id: str = ""
+    research_rounds: int = 0
+    research_stop_reason: str = ""
+    research_confidence: float = 0.0
+    research_error: Optional[dict] = None
+    research_reused: bool = False
+    fact_ids: List[str] = field(default_factory=list)
 
 
 class Orchestrator:
@@ -110,16 +120,29 @@ class Orchestrator:
 
     def __init__(self, llm: Callable[[str], str], graph,
                  llm_no_think: Callable[[str], str] = None,
-                 machine: Optional[TaskStateMachine] = None):
+                 machine: Optional[TaskStateMachine] = None,
+                 research_tool=None,
+                 research_budget_tokens: int = 4000,
+                 research_max_rounds: int = 2):
         self.llm = llm
         self.llm_no_think = llm_no_think or llm
         self.graph = graph
+        # 阶段 A：可选的 ResearchTool（CompassRAG）；不给就沿用纯 LLM 流程。
+        self.research_tool = research_tool
+        self.research_budget_tokens = research_budget_tokens
+        self.research_max_rounds = research_max_rounds
+        self._research_cache: dict = {}
+        self._research_written: set = set()
         # 可选：显式状态机。给了就按合法转移推进，任何失败都收敛到 FAILED 并留原因。
         self.machine = machine
 
-    def solve(self, problem: str) -> Tuple[str, OrchestrationTrace]:
+    def solve(self, problem: str, *, session_id: str = "", subtask_id: str = "S1",
+              research_query: str = "") -> Tuple[str, OrchestrationTrace]:
         try:
-            return self._solve(problem)
+            return self._solve(
+                problem, session_id=session_id, subtask_id=subtask_id,
+                research_query=research_query,
+            )
         except OrchestrationError as e:
             self._transition("fail", str(e))
             raise
@@ -134,7 +157,8 @@ class Orchestrator:
             if not self.machine.is_terminal:
                 raise
 
-    def _solve(self, problem: str) -> Tuple[str, OrchestrationTrace]:
+    def _solve(self, problem: str, *, session_id: str = "", subtask_id: str = "S1",
+               research_query: str = "") -> Tuple[str, OrchestrationTrace]:
         trace = OrchestrationTrace()
 
         # 1) Planner：定路线 → 写 Decision（actor=planner）
@@ -155,9 +179,15 @@ class Orchestrator:
         )
         self._transition("plan_ready", f"planner 路线：{route}")
 
+        # 1.5) 研究工具（阶段 A）：取证据 → 写 Fact（含 provenance）→ 喂给 Worker
+        evidence_block = self._research(
+            trace, session_id, subtask_id, research_query or route or problem
+        )
+        worker_problem = problem if not evidence_block else f"{problem}\n\n{evidence_block}"
+
         # 2) Worker：按路线解题 → 写 Artifact 草稿
         draft = self._call(
-            WORKER_PROMPT.format(state_view=self.graph.state_view("worker"), problem=problem, route=route),
+            WORKER_PROMPT.format(state_view=self.graph.state_view("worker"), problem=worker_problem, route=route),
             "worker",
         ).strip()
         trace.calls.append("worker")
@@ -226,6 +256,83 @@ class Orchestrator:
 
         trace.final = draft
         return draft, trace
+
+    # ---------- 研究工具 ----------
+
+    def _research(self, trace, session_id, subtask_id, query) -> str:
+        """调研究工具；成功则写 Fact（含 evidence provenance）并返回喂给 Worker 的文本。
+
+        工具失败只进 trace，不写图、不改状态机 —— 已有状态不受影响。
+        """
+        if self.research_tool is None:
+            return ""
+        try:
+            request = ResearchRequest(
+                session_id=session_id or "session",
+                subtask_id=subtask_id or "S1",
+                query=str(query or "").strip(),
+                budget_tokens=self.research_budget_tokens,
+                max_rounds=self.research_max_rounds,
+            )
+        except ValueError as exc:
+            trace.research_error = {"kind": "invalid_request", "message": str(exc), "trace_id": ""}
+            return ""
+        trace.research_trace_id = request.trace_id
+        result = self._research_cache.get(request.idempotency_key)
+        if result is None:
+            try:
+                result = self.research_tool.research(request)
+            except ResearchToolError as exc:
+                trace.research_error = describe_failure(exc)
+                return ""
+            self._research_cache[request.idempotency_key] = result
+        else:
+            trace.research_reused = True
+        if not isinstance(result, ResearchResult):  # 防止自定义工具返回裸 dict
+            try:
+                result = ResearchResult.from_dict(result)
+            except (TypeError, ValueError) as exc:
+                trace.research_error = {
+                    "kind": "invalid_request", "message": str(exc), "trace_id": request.trace_id
+                }
+                return ""
+        trace.research_rounds = result.retrieval_rounds
+        trace.research_stop_reason = result.stop_reason
+        trace.research_confidence = result.confidence
+        if not result.usable:
+            trace.research_error = {
+                "kind": "no_evidence",
+                "message": "工具没有给出结论",
+                "trace_id": result.trace_id or request.trace_id,
+            }
+            return ""
+        if request.idempotency_key in self._research_written:
+            # 同一幂等键：结论已经在图里，只复用文本，不重复写 Fact
+            return self._format_evidence(result)
+        note = self.graph.role_note(
+            "research",
+            "fact",
+            result.answer,
+            reason=(
+                f"检索 {result.retrieval_rounds} 轮，confidence={result.confidence:.2f}，"
+                f"stop={result.stop_reason or 'unknown'}"
+            ),
+            evidence=result.evidence_json(),
+        )
+        self._research_written.add(request.idempotency_key)
+        node_id = (note or {}).get("node_id", "") if isinstance(note, dict) else ""
+        if node_id:
+            trace.fact_ids.append(node_id)
+        return self._format_evidence(result)
+
+    @staticmethod
+    def _format_evidence(result: ResearchResult) -> str:
+        lines = ["[RESEARCH EVIDENCE]", result.answer.strip()]
+        for index, item in enumerate(result.evidence, start=1):
+            quote = (item.quote or "").strip()
+            lines.append(f"({index}) {item.source} — {quote}" if quote else f"({index}) {item.source}")
+        lines.append(f"[confidence={result.confidence:.2f} rounds={result.retrieval_rounds}]")
+        return "\n".join(lines)
 
     # ---------- 内部 ----------
 

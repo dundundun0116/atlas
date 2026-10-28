@@ -101,6 +101,7 @@ class TaskStateMachine:
         initial: TaskState = TaskState.PLANNING,
         max_repairs: int = 1,
         audit_hook: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        checkpoint_sink: Optional[Callable[[Dict[str, Any]], None]] = None,
     ):
         if max_repairs < 0:
             raise ValueError("max_repairs 不能为负")
@@ -112,6 +113,8 @@ class TaskStateMachine:
         self.history: List[TransitionRecord] = []
         self.violations: List[Dict[str, Any]] = []
         self._audit_hook = audit_hook
+        # 每次成功转移后回调一次快照：用于"转移即落 checkpoint"（阶段 C）
+        self._checkpoint_sink = checkpoint_sink
 
     # ---------- 查询 ----------
 
@@ -179,6 +182,8 @@ class TaskStateMachine:
         self.history.append(record)
         if self._audit_hook is not None:
             self._audit_hook("transition", record.to_dict())
+        if self._checkpoint_sink is not None:
+            self._checkpoint_sink(self.to_checkpoint())
         return self.state
 
     # ---------- 失败与审计 ----------
