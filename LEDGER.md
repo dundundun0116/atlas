@@ -122,12 +122,19 @@
   3. 同预算对照（20–30 万）；4. 三基准（≥300 万）。
 - 已提交三次 commit（代码/台账/双臂工具），明细见 `git log`。
 
+## 2026-10-28 收尾：提交与实验产物入库
+
+- 工作区已提交 **4 个 commit**（`8b259bd` A–E 升级 → `88ccc21` 台账 → `81c1a80` 双臂工具 → `ff872eb` 实验结论），当前只剩 2 项未跟踪（`_stash/` 已 gitignore 后的残留）。
+- B 臂结果文件：`runs/qa/musique__plus_full_words__samples.jsonl`（50 题）与轨迹 `runs/traces/musique__plus_full_words.jsonl`；manifest 指纹 `6a52c881655dc554`。**注意 `runs/` 不入库**，数字以 `docs/experiment-answer-format.md` 与 `decisions/D11` 里的表为准；要复现需重跑（命令在实验文档里）。
+- 测试 228 passed（新增 arms 5 条）。下一步仍等预算决定：六配置重跑 280 万（推荐）> C 臂 100 万 > 同预算 20–30 万 > 三基准 300 万+。
+
 
 ## 变更登记（插件自动维护）
 
 > 这张表由插件**自动**维护：每次写台账 / 归档追加一行，只留最近 12 条（条数可在设置里调，项目清单里的 `changeRegisterMax` 优先）。
 > 完整历史在活动日志的 `L0-ledger-changes.md`（用 `ledger_log({view:"audit"})` 查）。
 
+- 2026-10-28 16:31:53 (append) [486c] +6 行 → 129 行 · revision→35
 - 2026-10-28 16:30:08 (append) [486c] +11 行 → 123 行 · revision→34
 - 2026-10-28 13:30:01 (append) [486c] +6 行 → 112 行 · revision→33
 - 2026-10-28 13:29:41 (append) [486c] +11 行 → 106 行 · revision→32
@@ -139,4 +146,3 @@
 - 2026-10-28 13:25:10 (append) [486c] +9 行 → 234 行 · revision→26
 - 2026-10-28 13:24:29 (append) [486c] +7 行 → 225 行 · revision→25
 - 2026-10-28 13:23:50 (append) [486c] +8 行 → 218 行 · revision→24
-- 2026-10-28 13:22:52 (append) [486c] +11 行 → 210 行 · revision→23
