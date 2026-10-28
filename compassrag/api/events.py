@@ -23,6 +23,7 @@ class RunRecord:
     question: str
     session_id: str = ""
     subtask_id: str = ""
+    index_version: str = ""
     status: str = "queued"
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
@@ -47,6 +48,7 @@ class RunRecord:
         return {
             "run_id": self.run_id, "question": self.question, "status": self.status,
             "session_id": self.session_id, "subtask_id": self.subtask_id,
+            "index_version": self.index_version,
             "trace_id": self.trace_id, "answer": self.answer,
             "stop_reason": self.stop_reason, "failure": self.failure,
             "confidence": self.confidence, "rounds": self.rounds,
@@ -63,10 +65,10 @@ class RunRegistry:
         self._lock = threading.Lock()
 
     def create(self, run_id: str, question: str, *, session_id: str = "",
-               subtask_id: str = "") -> RunRecord:
+               subtask_id: str = "", index_version: str = "") -> RunRecord:
         with self._lock:
-            rec = RunRecord(run_id=run_id, question=question,
-                            session_id=session_id, subtask_id=subtask_id)
+            rec = RunRecord(run_id=run_id, question=question, session_id=session_id,
+                            subtask_id=subtask_id, index_version=index_version)
             self._runs[run_id] = rec
             return rec
 

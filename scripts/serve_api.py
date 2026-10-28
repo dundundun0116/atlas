@@ -63,6 +63,8 @@ def main():
     ap.add_argument("--embeddings-dir", default=REPO_ROOT / "data" / "cache" / "embeddings")
     ap.add_argument("--wiki-dir", default=REPO_ROOT / "data" / "cache" / "wiki")
     ap.add_argument("--kg-dir", default=REPO_ROOT / "data" / "cache" / "kg")
+    ap.add_argument("--index-source", choices=["dataset", "ingest"], default="dataset",
+                    help="dataset=用 data/cache 里的基准索引；ingest=用上传文档构建的最新版本")
     ap.add_argument("--ingest-root", default=REPO_ROOT / "runs" / "ingest",
                     help="文档/索引版本目录（Task 4）")
     ap.add_argument("--runtime-index-version", default="",
@@ -76,26 +78,39 @@ def main():
     chunks_path = Path(args.corpus_dir) / f"{args.benchmark}__{args.variant}" / "chunks.jsonl"
     if not chunks_path.exists():
         raise SystemExit(f"语料不存在：{chunks_path}（先跑 scripts/build_corpus.py）")
-    chunks = [json.loads(l) for l in chunks_path.read_text(encoding="utf-8").splitlines() if l.strip()]
-    store = {c["chunk_id"]: c for c in chunks}
+    runtime_version = args.runtime_index_version
+    if args.index_source == "ingest":
+        from compassrag.api.ingest import IngestStore
+        ingest = IngestStore(args.ingest_root)
+        latest = ingest.latest_version()
+        if latest is None:
+            raise SystemExit(f"没有可用的索引版本：{args.ingest_root}（先上传文档并构建）")
+        tools, store = ingest.load_tools(latest.version)
+        runtime_version = runtime_version or latest.version
+        chunks = list(store.values())
+        print(f"[ingest] 版本 {latest.version}：{len(chunks)} 块，工具 {list(tools)}（仅 BM25）")
+    else:
+        chunks = [json.loads(l) for l in chunks_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        store = {c["chunk_id"]: c for c in chunks}
 
-    tools = {"bm25": BM25Index.load(Path(args.index_dir) / f"{args.benchmark}__{args.variant}")}
+    if args.index_source == "dataset":
+        tools = {"bm25": BM25Index.load(Path(args.index_dir) / f"{args.benchmark}__{args.variant}")}
     embedder = None
-    if agent_cfg.use_dense:
+    if args.index_source == "dataset" and agent_cfg.use_dense:
         embedder = LocalDenseEmbedder(device=args.device)
         tools["dense"] = DenseIndex.load(
             Path(args.embeddings_dir) / f"{args.benchmark}__{args.variant}",
             [c["chunk_id"] for c in chunks], embedder=embedder)
-    if agent_cfg.use_wiki and "dense" in tools:
+    if args.index_source == "dataset" and agent_cfg.use_wiki and "dense" in tools:
         tools["wiki"] = WikiIndex.load(Path(args.wiki_dir) / f"{args.benchmark}__{args.variant}",
                                        dense=tools["dense"], chunks=chunks)
-    if agent_cfg.use_kg and embedder is not None:
+    if args.index_source == "dataset" and agent_cfg.use_kg and embedder is not None:
         tools["kg"] = KGSearcher.load(Path(args.kg_dir) / f"{args.benchmark}__{args.variant}",
                                       embedder=embedder)
 
     agent = Agent(LLMClient(), tools, store, agent_cfg)
     app = create_app(agent, trace_dir=args.trace_dir, ingest_root=args.ingest_root,
-                     runtime_index_version=args.runtime_index_version)
+                     runtime_index_version=runtime_version)
     if args.check:
         from fastapi.testclient import TestClient
         body = TestClient(app).get("/health").json()

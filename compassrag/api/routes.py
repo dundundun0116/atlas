@@ -60,13 +60,26 @@ def _sse(event: dict) -> str:
 def build_router(agent: Agent, *, store: TraceStore,
                  cache: dict[str, ResearchResult] | None = None,
                  registry: RunRegistry | None = None,
-                 publisher: EventPublisher | None = None) -> APIRouter:
+                 publisher: EventPublisher | None = None,
+                 index_version: str = "") -> APIRouter:
     router = APIRouter()
     cache = cache if cache is not None else {}
     registry = registry if registry is not None else RunRegistry()
     publisher = publisher if publisher is not None else EventPublisher()
 
     # -- 运行执行（后台线程） ------------------------------------------- #
+
+    def _record_result(run_id: str, result: ResearchResult) -> None:
+        """把一次运行的结果写进 RunRecord（sync/async 共用）。"""
+        trace = store.get(result.trace_id) or {}
+        usage = trace.get("usage") or {}
+        tokens = int(usage.get("prompt_tokens", 0)) + int(usage.get("completion_tokens", 0))
+        status = "cancelled" if result.stop_reason == "cancelled" else "completed"
+        registry.update(run_id, status=status, trace_id=result.trace_id,
+                        answer=result.answer, stop_reason=result.stop_reason,
+                        failure=result.failure, confidence=result.confidence,
+                        rounds=result.retrieval_rounds, tokens=tokens,
+                        result=result.model_dump(), finished_at=time.time())
 
     def _execute(request: ResearchRequest, run_id: str) -> None:
         registry.update(run_id, status="running", started_at=time.time())
@@ -138,7 +151,7 @@ def build_router(agent: Agent, *, store: TraceStore,
     def _start_async(request: ResearchRequest) -> RunSummary:
         run_id = uuid.uuid4().hex[:12]
         registry.create(run_id, request.query, session_id=request.session_id,
-                        subtask_id=request.subtask_id)
+                        subtask_id=request.subtask_id, index_version=index_version)
         # 先快照再提交：保证响应里的状态就是 queued（不受后台线程抢先完成影响）
         summary = RunSummary(**registry.get(run_id).as_summary())
         _EXECUTOR.submit(_execute, request, run_id)
@@ -150,17 +163,35 @@ def build_router(agent: Agent, *, store: TraceStore,
         return _start_async(request)
 
     def _run_sync(request: ResearchRequest) -> ResearchResult:
+        run_id = uuid.uuid4().hex[:12]
+        registry.create(run_id, request.query, session_id=request.session_id,
+                        subtask_id=request.subtask_id, index_version=index_version)
+        registry.update(run_id, status="running", started_at=time.time())
+
+        def on_event(event: dict) -> None:
+            publisher.publish(run_id, {"kind": event.get("kind", "step"),
+                                       "ts": event.get("ts", time.time()),
+                                       "payload": event})
+            rec = registry.get(run_id)
+            registry.update(run_id, n_events=(rec.n_events + 1) if rec else 1)
+
+        def run() -> ResearchResult:
+            return research(agent, request, cache=cache, on_trace=store.put,
+                            run_id=run_id, on_event=on_event)
+
         try:
             if request.timeout_s and request.timeout_s > 0:
-                future = _EXECUTOR.submit(research, agent, request, cache=cache,
-                                          on_trace=store.put)
+                future = _EXECUTOR.submit(run)
                 try:
-                    return future.result(timeout=request.timeout_s)
+                    result = future.result(timeout=request.timeout_s)
                 except FutureTimeout:
                     future.cancel()
-                    return ResearchResult(answer="", stop_reason="", trace_id="",
-                                          failure="timeout")
-            return research(agent, request, cache=cache, on_trace=store.put)
+                    result = ResearchResult(answer="", stop_reason="", trace_id="",
+                                            failure="timeout")
+            else:
+                result = run()
+            _record_result(run_id, result)
+            return result
         except ValueError as exc:
             raise HTTPException(status_code=422,
                                 detail={"error": "invalid_request", "detail": str(exc)})

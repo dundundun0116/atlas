@@ -185,12 +185,21 @@
 - 测试：后端 **244 passed**，前端 **9 passed**，`npm run build` 通过；工作区干净。
 - 下一步：Task 4（文档/语料管理闭环：上传、后台构建、索引版本固定）、Task 5（docker-compose + 架构文档）、Task 6（评测报告与 resume 证据）。
 
+## 2026-10-28 全栈计划 Task 4 完成（文档上传 + 索引版本）
+
+- **后端**（commit `942d5c3`）：`compassrag/api/ingest.py` 文档指纹去重 + txt/md/json 解析 + 分块 + BM25 版本化构建；阶段 `chunk/bm25/dense/entity_graph` 如实记录（未启用写原因，不假装成功）；`ingest_routes.py` 五个端点 `/documents`（POST/GET）、`/index/build`、`/index/versions`、`/index/status`（`runtime_version` vs `built_version`，不一致显式告警）；上传即校验（空内容/未知格式/坏 JSON → 422），构建失败记录不抛 500。
+- **前端**（commit `6938b79`）：`CorpusPanel` 展示文档/块/两个版本 + 上传 + 重建 + 错误可见；client 增加类型化调用；**vite proxy 补 `/index`、`/documents`**——漏了会让面板静默降级成"未启用"（E2E 才发现）。
+- **真实浏览器验证**：上传 `notes.txt` → 重建索引 → `v20261028211321`（1 文档 1 块；chunk/bm25=ok，dense/entity_graph=skipped 并写原因）；`/index/status` 正确反映。
+- 测试：后端 **250 passed**（新增 ingest 6 条），前端 **11 passed**，`vite build` 通过。
+- 仍未做：Task 5（docker-compose + `docs/fullstack-architecture.md` + 一条命令启动）、Task 6（`docs/evaluation.md` 与 resume 证据）；Playwright 未固化（当前为组件测试 + 手工 E2E）。
+
 
 ## 变更登记（插件自动维护）
 
 > 这张表由插件**自动**维护：每次写台账 / 归档追加一行，只留最近 12 条（条数可在设置里调，项目清单里的 `changeRegisterMax` 优先）。
 > 完整历史在活动日志的 `L0-ledger-changes.md`（用 `ledger_log({view:"audit"})` 查）。
 
+- 2026-10-28 21:16:09 (append) [486c] +8 行 → 194 行 · revision→42
 - 2026-10-28 20:59:06 (append) [486c] +11 行 → 186 行 · revision→41
 - 2026-10-28 20:46:04 (append) [486c] +12 行 → 175 行 · revision→40
 - 2026-10-28 19:53:27 (append) [486c] +13 行 → 163 行 · revision→39
@@ -202,4 +211,3 @@
 - 2026-10-28 13:30:01 (append) [486c] +6 行 → 112 行 · revision→33
 - 2026-10-28 13:29:41 (append) [486c] +11 行 → 106 行 · revision→32
 - 2026-10-28 13:29:18 (append) [486c] +14 行 → 95 行 · revision→31
-- 2026-10-28 13:28:44 (append) [486c] +8 行 → 81 行 · revision→30

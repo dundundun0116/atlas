@@ -32,6 +32,7 @@ class RunSummary(BaseModel):
     question: str = ""
     session_id: str = ""
     subtask_id: str = ""
+    index_version: str = ""
     status: RunStatus = "queued"
     trace_id: str = ""
     answer: str = ""

@@ -36,7 +36,8 @@ def create_app(agent: Agent, *, trace_dir: str | Path | None = None,
     app.state.registry = registry
     app.state.publisher = publisher
     app.include_router(build_router(agent, store=store, cache=cache,
-                                    registry=registry, publisher=publisher))
+                                    registry=registry, publisher=publisher,
+                                    index_version=runtime_index_version))
     if ingest_root is not None:
         app.state.ingest = IngestStore(ingest_root)
         app.include_router(build_ingest_router(app.state.ingest,

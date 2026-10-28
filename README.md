@@ -95,6 +95,17 @@ python scripts/serve_api.py --port 8000    # POST /research · GET /runs/{trace_
 
 复现实验小贴士：所有批量脚本都带**断点续跑**（按 id / 块 id 增量落盘，中断后原命令重跑即可）；`--variant samples` 表示"抽样题小库"，不带则用全量 dev 语料库；`configs/ablation/` 每个文件就是一个消融级别。
 
+## 一条命令起演示
+
+```bash
+bash scripts/demo.sh              # 用 data/cache 的基准索引起前后端（Ctrl-C 一起退出）
+bash scripts/demo.sh --ingest     # 用 runs/ingest 里最新构建的上传文档索引
+# 或者容器化（需 Docker Desktop 运行）
+docker compose up --build
+```
+
+架构、端口、状态机与失败语义、索引版本固定见 [docs/fullstack-architecture.md](docs/fullstack-architecture.md)。
+
 ## 研究工作台（Web）
 
 前端是 Vite + React + TypeScript，类型由后端 OpenAPI 生成，**组件里不复制业务 schema**：

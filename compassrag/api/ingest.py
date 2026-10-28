@@ -182,7 +182,11 @@ class IngestStore:
               dense: bool = False, entity_graph: bool = False) -> IndexVersion:
         """构建一个新版本。阶段状态如实记录，跳过也写原因。"""
         doc_metas = self.documents()
-        version = version or time.strftime("v%Y%m%d%H%M%S")
+        base = version or time.strftime("v%Y%m%d%H%M%S")
+        version, n = base, 1
+        while (self.versions_dir / version).exists():   # 同一秒内连续构建要能区分
+            n += 1
+            version = f"{base}-{n}"
         out_dir = self.versions_dir / version
         out_dir.mkdir(parents=True, exist_ok=True)
         stages = [BuildStage(name="chunk"), BuildStage(name="bm25"),
@@ -249,6 +253,20 @@ class IngestStore:
                                               encoding="utf-8")
 
     # -- 检索辅助 -------------------------------------------------------- #
+
+    def load_tools(self, version: str) -> tuple[dict, dict]:
+        """把某个版本装成 `{name: 检索器}` + `chunk_store`。
+
+        只装 BM25：上传的文档没有向量与实体图（构建阶段标 skipped），所以这个版本
+        只支持词法检索——这一点必须写进状态，不能让调用方以为三路都在。
+        """
+        version_dir = self.versions_dir / version
+        if not (version_dir / "bm25").exists():
+            raise ValueError(f"版本 {version} 没有 BM25 索引，无法装载")
+        chunks = self.load_chunks(version)
+        store = {c["chunk_id"]: c for c in chunks}
+        tools = {"bm25": BM25Index.load(version_dir / "bm25")}
+        return tools, store
 
     def load_chunks(self, version: str) -> list[dict]:
         path = self.versions_dir / version / "chunks.jsonl"
