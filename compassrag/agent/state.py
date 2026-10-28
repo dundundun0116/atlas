@@ -69,6 +69,7 @@ class AgentState:
         self.on_event = on_event            # 结构化事件出口（SSE / 日志）
         self.cancel_check = cancel_check    # 协作式取消：每次节点入口检查
         self.cancelled = False
+        self.route = None                    # 由控制流写入（direct 路由要用常识提示词）
         self._last_step_ts = time.time()
         self.evidence: list[str] = []
         self.seen: set[str] = set()

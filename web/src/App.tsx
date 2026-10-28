@@ -69,7 +69,10 @@ export default function App() {
         const summary = await submitAsync({ query, ...options, async_mode: false } as any);
         setRunId(summary.run_id);
         closeRef.current = subscribeEvents(summary.run_id, (event) => {
-          setEvents((prev) => (event.kind === "end" ? prev : [...prev, event]));
+          // 只把「轨迹步骤」放进时间线：status/finish 这类生命周期事件用于状态迁移，
+          // 否则 finish 会出现两条（生命周期一条 + finish 节点一条）。
+          const isStep = Boolean((event.payload as any)?.step_id);
+          setEvents((prev) => (isStep ? [...prev, event] : prev));
           if (event.kind === "finish" || event.kind === "error") {
             getRun(summary.run_id)
               .then((envelope) => {
@@ -113,7 +116,7 @@ export default function App() {
       <div className="columns">
         <div className="col">
           <AnswerPanel result={result} />
-          <EvidencePanel evidence={result?.evidence} />
+          {result && <EvidencePanel evidence={result.evidence} />}
         </div>
         <div className="col">
           <TraceTimeline events={events} />

@@ -96,6 +96,7 @@ class GraphRunner:
             return {"stop": StopReason.CANCELLED.value, "pending": []}
         if agent.config.use_decision:
             decision = agent._plan(st)
+            st.route = decision.route
             if decision.route is Route.DIRECT:
                 return {"decision": decision, "pending": [],
                         "stop": StopReason.DIRECT.value}
@@ -106,6 +107,7 @@ class GraphRunner:
                 pending = [{"query": st.question, "source": QuerySource.ORIGINAL.value}]
             return {"decision": decision, "pending": pending}
 
+        st.route = Route.SINGLE
         if agent.config.use_rewrite:
             variants = build_query_variants_sourced(agent.llm, st.question)
         else:

@@ -173,3 +173,17 @@ def test_answerless_detection_is_whitespace_and_case_insensitive():
 
     assert is_answerless("  Unknown. ") and is_answerless("")
     assert not is_answerless("Unknown quantity")
+
+
+def test_direct_route_without_evidence_gets_neutral_confidence():
+    """direct 路由没有证据但有答案：置信度给中性值，而不是 0（0 会被读成失败）。"""
+    from compassrag.agent.schemas import AnswerTrace, Route
+    from compassrag.agent.research import confidence_of
+
+    trace = AnswerTrace(question="q", answer="Paris", stop_reason=StopReason.DIRECT,
+                        route=Route.DIRECT)
+    assert confidence_of(trace, []) == 0.5
+
+    trace.route = Route.SINGLE          # 非 direct 且无证据 → 视为不可信
+    trace.stop_reason = StopReason.ANSWERED
+    assert confidence_of(trace, []) == 0.0

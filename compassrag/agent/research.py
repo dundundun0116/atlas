@@ -89,8 +89,13 @@ def evidence_from_trace(trace: AnswerTrace, store: dict[str, dict],
 
 def confidence_of(trace: AnswerTrace, evidence: list[ResearchEvidence]) -> float:
     """启发式置信度（不是校准概率）：证据覆盖 × claim 支持率 × 停止原因。"""
-    if not evidence or failure_category(trace.stop_reason.value) or is_answerless(trace.answer):
+    if failure_category(trace.stop_reason.value) or is_answerless(trace.answer):
         return 0.0
+    if not evidence:
+        # direct 路由：没有证据可核，但有答案。给中性置信度并靠 stop_reason 表达来源，
+        # 不假装可信、也不当成失败。
+        from .schemas import Route
+        return 0.5 if trace.route is Route.DIRECT else 0.0
     coverage = min(1.0, len(evidence) / EVIDENCE_LIMIT_DEFAULT)
     v = trace.verification
     if v is not None and v.parsed and v.claims:

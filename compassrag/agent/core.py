@@ -49,6 +49,12 @@ Answer:"""
 WORD_LIMIT_TMPL = ("\nAnswer with at most {n} words. No titles, no explanations, "
                   "no parentheticals — just the answer itself.")
 
+DIRECT_ANSWER_PROMPT = """Answer the question directly from your own knowledge.
+No retrieval was needed for this question. If you are not sure, answer "unknown".
+
+Question: {question}
+Answer:"""
+
 RETRY_NUDGE = ("Conclude now without further analysis. Do not re-read or re-check the passages. "
                "Reply with at most 5 words: the answer if the evidence contains it, otherwise \"unknown\".")
 
@@ -158,6 +164,7 @@ class Agent:
         state = self._new_state(question, run_id=run_id, on_event=on_event,
                                 cancel_check=cancel_check)
         route, stop = self._control_flow(state)
+        state.route = route
         if state.check_cancel():
             return self._finish_cancelled(state, route)
         stop = self._finalize_stop(state, stop)
@@ -482,7 +489,13 @@ class Agent:
         return None
 
     def _answer_prompt(self, state: AgentState) -> str:
-        """答案提示词。`strict_answer_words=0` 时与历史版本**逐字节一致**（锚点要求）。"""
+        """答案提示词。
+
+        * `direct` 路由（判定"不需要检索"）用常识提示词——否则"只准用证据"会把它逼成 unknown；
+        * 其余路径用证据提示词；`strict_answer_words=0` 时与历史版本**逐字节一致**（锚点要求）。
+        """
+        if state.route is Route.DIRECT:
+            return DIRECT_ANSWER_PROMPT.format(question=state.question)
         prompt = ANSWER_PROMPT.format(context=self._format(state.evidence),
                                       question=state.question)
         if self.config.strict_answer_words > 0:

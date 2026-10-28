@@ -202,3 +202,20 @@ def test_strict_answer_words_appends_constraint_only_when_enabled():
                   AgentConfig(top_k=2, strict_answer_words=5))
     prompt = agent._answer_prompt(agent._new_state("q"))
     assert "at most 5 words" in prompt and "no parentheticals" in prompt
+
+
+def test_direct_route_uses_common_knowledge_prompt():
+    """direct 路由不能用"只准用证据"的提示词，否则常识题会被逼成 unknown。"""
+    from compassrag.agent.core import DIRECT_ANSWER_PROMPT
+    from compassrag.agent.schemas import Route
+
+    llm = ScriptLLM(_plan("direct", []), "Paris")
+    agent = Agent(llm, {"bm25": FakeTool()}, STORE, AgentConfig(use_decision=True))
+    result = agent.answer("What is the capital of France?")
+    assert result.route == "direct" and result.answer == "Paris"
+
+    st = agent._new_state("q")
+    st.route = Route.DIRECT
+    prompt = agent._answer_prompt(st)
+    assert prompt == DIRECT_ANSWER_PROMPT.format(question="q")
+    assert "based only on the evidence" not in prompt

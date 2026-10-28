@@ -95,6 +95,27 @@ python scripts/serve_api.py --port 8000    # POST /research · GET /runs/{trace_
 
 复现实验小贴士：所有批量脚本都带**断点续跑**（按 id / 块 id 增量落盘，中断后原命令重跑即可）；`--variant samples` 表示"抽样题小库"，不带则用全量 dev 语料库；`configs/ablation/` 每个文件就是一个消融级别。
 
+## 研究工作台（Web）
+
+前端是 Vite + React + TypeScript，类型由后端 OpenAPI 生成，**组件里不复制业务 schema**：
+
+```bash
+# 1. 后端（装配真实索引；--check 只体检）
+python scripts/serve_api.py --port 8000
+
+# 2. 类型（后端改了契约就重新生成）
+python scripts/export_openapi.py
+cd web && npm install && npx openapi-typescript openapi.json -o src/api/types.ts
+
+# 3. 前端
+npm run dev          # http://localhost:5173（/research 等路径代理到 8000）
+npm test             # 组件测试
+npm run build
+```
+
+界面包含四块：提问与预算配置、答案（置信度/停止原因/拒答）、证据（来源/检索器/排名/引用片段）、过程时间线（SSE 实时推送 `plan → retrieve → verify → answer → finish`）与历史运行（打开既有 trace，**不重新调用模型**）。
+异步运行用 `POST /research/async` 拿 `run_id`，再订阅 `GET /runs/{id}/events`；`POST /runs/{id}/cancel` 可取消，取消后不再发起新的模型或检索调用。
+
 ## 项目结构
 
 ```
