@@ -7,7 +7,15 @@ from atlas.evaluation.fixtures import (
     Subtask,
     load_fixtures,
 )
-from atlas.evaluation.harness import Faults, ResearchHarness, RunResult, StepResult, run_matrix
+from atlas.evaluation.harness import (
+    Faults,
+    ModelResearcher,
+    ResearchHarness,
+    RunResult,
+    ScriptedResearcher,
+    StepResult,
+    run_matrix,
+)
 from atlas.evaluation.metrics import (
     REQUIRED_METRICS,
     aggregate,
@@ -35,9 +43,11 @@ __all__ = [
     "GraphStatePolicy",
     "MemoryPolicy",
     "MemoryState",
+    "ModelResearcher",
     "NarrativeSummaryPolicy",
     "ResearchHarness",
     "RunResult",
+    "ScriptedResearcher",
     "StepResult",
     "Subtask",
     "aggregate",

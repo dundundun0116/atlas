@@ -85,6 +85,33 @@ class RunResult:
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
+_LATEX_MAP = (
+    ("\\tau", "τ"), ("\\sigma", "σ"), ("\\gamma", "γ"),
+    ("\\le", "≤"), ("\\leq", "≤"), ("\\theta", "θ"),
+)
+
+
+def normalize_text(text: str) -> str:
+    """判分归一化：去掉 LaTeX/空白/全角差异，保留语义核心。"""
+    result = str(text or "")
+    for source, target in _LATEX_MAP:
+        result = result.replace(source, target)
+    for token in ("^{2}", "^2", "²"):
+        result = result.replace(token, "2")
+    for token in ("$", "{", "}", "\\"):
+        result = result.replace(token, "")
+    result = result.replace("　", "").replace(" ", "").replace("\n", "").replace("\t", "")
+    return result.lower()
+
+
+def contains_probe(answer: str, probe: str) -> bool:
+    """核心断言是否出现（空 probe 视为无要求）。"""
+    needle = normalize_text(probe)
+    if not needle:
+        return True
+    return needle in normalize_text(answer)
+
+
 class ScriptedResearcher:
     """脚本化研究者：答案取决于「上下文里有没有前序事实 / 约束 / 过期值」。"""
 
@@ -114,7 +141,9 @@ class ScriptedResearcher:
         ):
             stale_misuse = True
             lines.append(f"采用旧值 {subtask.stale_value}")
-        completed = has_earlier and subtask.required_fact in "\n".join(lines)
+        completed = has_earlier and contains_probe(
+            "\n".join(lines), subtask.probe or subtask.required_fact
+        )
         return {
             "answer": "\n".join(lines),
             "completed": completed,
@@ -123,14 +152,62 @@ class ScriptedResearcher:
         }
 
 
+class ModelResearcher:
+    """真实模型研究者（Task 6）：把上下文喂给模型，用**输出内容**判定指标。
+
+    判分口径（与脚本化研究者一致，便于对照）：
+    - 完成：回答里出现该子任务要求的结论；
+    - 违规：回答里出现被约束禁止的做法；
+    - 过期误用：回答里出现旧值，且没有给出新值。
+    模型异常/空响应按一次失败计，不重试（重试由上层策略决定，这里保持测量纯粹）。
+    """
+
+    def __init__(self, fixture: Fixture, llm, *, max_prompt_chars: int = 8000):
+        self.fixture = fixture
+        self.llm = llm
+        self.max_prompt_chars = max_prompt_chars
+        self.calls = 0
+
+    def build_prompt(self, subtask: Subtask, context: str) -> str:
+        constraints = "\n".join(f"- {c}" for c in self.fixture.constraints) or "（无）"
+        return (
+            "你是长程研究 Agent 的执行者。只依据下面的记忆上下文回答问题。\n"
+            f"[任务目标] {self.fixture.goal}\n"
+            f"[约束]\n{constraints}\n"
+            f"[记忆上下文]\n{context[: self.max_prompt_chars]}\n"
+            f"[当前子问题] {subtask.question}\n"
+            "直接给出结论（一句话）；若上下文信息不足，明确回答“无法确定”。"
+        )
+
+    def answer(self, subtask: Subtask, context: str, subtask_id: str = "") -> Dict[str, Any]:
+        self.calls += 1
+        try:
+            text = str(self.llm(self.build_prompt(subtask, context)) or "").strip()
+        except Exception as exc:  # noqa: BLE001 - 记录失败，不吞掉
+            return {"answer": "", "completed": False, "violation": False,
+                    "stale_misuse": False, "error": f"{type(exc).__name__}: {exc}"}
+        target = subtask.probe or subtask.required_fact
+        completed = bool(text) and contains_probe(text, target)
+        violation = bool(subtask.forbidden_method) and contains_probe(
+            text, subtask.forbidden_method
+        )
+        stale_misuse = bool(subtask.stale_value) and (
+            contains_probe(text, subtask.stale_value)
+            and not contains_probe(text, target)
+        )
+        return {"answer": text, "completed": completed, "violation": violation,
+                "stale_misuse": stale_misuse, "error": "" if text else "empty_response"}
+
+
 class ResearchHarness:
     """跑一个 fixture：逐子任务取上下文 → 研究 → 记产出（可注入故障）。"""
 
     def __init__(self, fixture: Fixture, policy: MemoryPolicy,
-                 price_per_1k_tokens: float = 0.002):
+                 price_per_1k_tokens: float = 0.002, researcher=None):
         self.fixture = fixture
         self.policy = policy
-        self.researcher = ScriptedResearcher(fixture)
+        # 默认脚本化研究者（离线口径验证）；Task 6 传 ModelResearcher 换真实模型
+        self.researcher = researcher if researcher is not None else ScriptedResearcher(fixture)
         self.price_per_1k = price_per_1k_tokens
         self.state = MemoryState(
             records=list(fixture.seed_records),
@@ -268,6 +345,7 @@ class ResearchHarness:
                 revised=self.fixture.requires_revision and subtask.forbidden_method != "",
                 context_tokens=tokens,
                 answer=outcome["answer"],
+                error=outcome.get("error", "") or "",
                 attempts=attempts,
                 model_calls=attempts,
             )
@@ -303,13 +381,23 @@ class ResearchHarness:
 
 def run_matrix(fixtures: Sequence[Fixture],
                policies: Dict[str, MemoryPolicy],
-               faults: Optional[Faults] = None) -> List[RunResult]:
-    """三类 fixture × 三种记忆策略，各跑一遍（离线、确定性）。"""
+               faults: Optional[Faults] = None,
+               researcher_factory=None) -> List[RunResult]:
+    """三类 fixture × 三种记忆策略，各跑一遍。
+
+    `researcher_factory(fixture)` 可传入 `ModelResearcher` 做真实模型评测；
+    不给时是脚本化研究者（离线、确定性）。
+    """
     results: List[RunResult] = []
     for fixture in fixtures:
         for name in sorted(policies):
             policy = _fresh_policy(name, policies)
-            results.append(ResearchHarness(fixture, policy).run(faults))
+            researcher = (
+                researcher_factory(fixture) if researcher_factory is not None else None
+            )
+            results.append(
+                ResearchHarness(fixture, policy, researcher=researcher).run(faults)
+            )
     return results
 
 

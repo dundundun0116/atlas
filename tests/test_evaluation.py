@@ -85,11 +85,16 @@ class TestStrategyContrast:
         assert by_policy["narrative_summary"]["stale_misuse_rate"] > 0
         assert by_policy["graph_state"]["stale_misuse_rate"] == 0
 
-    def test_graph_state_uses_fewer_context_tokens_on_long_tasks(self, matrix):
-        multi = [r for r in matrix if r.family == "multi_hop"]
-        graph = next(r.context_tokens for r in multi if r.policy == "graph_state")
-        full = next(r.context_tokens for r in multi if r.policy == "full_history")
-        assert graph < full
+    def test_full_history_grows_while_graph_state_stays_bounded(self):
+        """诚实口径：小任务上图状态**不一定**更省 token，但它有预算上限。"""
+        fixture = load_fixtures(("multi_hop",))[0]
+        early = ResearchHarness(fixture, build_policies()["full_history"])
+        early.run_until(1)
+        late = ResearchHarness(fixture, build_policies()["full_history"])
+        late.run_until(4)
+        graph = ResearchHarness(fixture, build_policies()["graph_state"]).run()
+        assert late.context_tokens > early.context_tokens   # 全历史随步数线性增长
+        assert graph.context_tokens <= 1200                 # 图状态受组装预算约束
 
 
 class TestFaultInjection:

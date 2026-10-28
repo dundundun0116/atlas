@@ -25,6 +25,8 @@ class Subtask:
     forbidden_method: str = ""
     #: 过期值：上下文里只有它时研究者会误用
     stale_value: str = ""
+    #: 判分用的核心断言（真实模型的措辞/LaTeX 与 required_fact 不会逐字一致）
+    probe: str = ""
 
 
 @dataclass(frozen=True)
@@ -61,17 +63,28 @@ def multi_hop_fixture() -> Fixture:
         family="multi_hop",
         goal="证明 L(h^t,w^t) 的上界",
         constraints=("不得使用未证明的引理",),
+        # 首问必须能答：真实任务的"S1"同样有检索到的证据，不是凭空知道答案
+        seed_records=(
+            "fact: 引理 2 给出 L ≤ 2τσ²（来源 Theorem 3, 2312.05134）",
+            "fact: 递推式形式为 L_{t+1} ≤ L_t + 4γ（来源 Lemma 4）",
+            "fact: 合并后最终常数项为 4γL（来源 Theorem 5）",
+        ),
+        seed_summaries=(
+            "[证据] 引理 2 给出 L ≤ 2τσ²；递推式含 +4γ；最终常数项 4γL",
+        ),
         subtasks=(
             Subtask(
                 subtask_id="S1",
                 question="引理 2 给出的鞅版本界是什么？",
                 required_fact="引理 2 给出 L ≤ 2τσ²",
+                probe="2τσ²",
             ),
             Subtask(
                 subtask_id="S2",
                 question="把引理 2 的界代入递推式后得到什么？",
                 required_fact="L ≤ 2τσ² + 4γ",
                 needs_earlier_fact="引理 2 给出 L ≤ 2τσ²",
+                probe="4γ",
             ),
             Subtask(
                 subtask_id="S3",
@@ -79,12 +92,14 @@ def multi_hop_fixture() -> Fixture:
                 required_fact="常数项为 4γL",
                 needs_earlier_fact="L ≤ 2τσ² + 4γ",
                 forbidden_method="直接引用未证明的引理 7",
+                probe="4γL",
             ),
             Subtask(
                 subtask_id="S4",
                 question="整条证明依赖哪个主引理？",
                 required_fact="主引理是引理 2",
                 needs_earlier_fact="引理 2 给出 L ≤ 2τσ²",  # 3 步之前的事实：摘要窗口会丢链
+                probe="引理 2",
             ),
         ),
     )
@@ -100,6 +115,7 @@ def conflicting_sources_fixture() -> Fixture:
         stale_values=("4τσ²",),
         seed_records=(
             "fact: 常数项为 2τσ²\n备注: 旧值 4τσ² 已作废（修订版）",
+            "fact: 修订版常数项 2τσ² 对应引理 2（来源 修订说明第 2 节）",
         ),
         seed_summaries=("旧摘要: 常数项 4τσ²",),
         subtasks=(
@@ -108,12 +124,14 @@ def conflicting_sources_fixture() -> Fixture:
                 question="修订版给出的常数项是多少？",
                 required_fact="常数项为 2τσ²",
                 stale_value="4τσ²",
+                probe="2τσ²",
             ),
             Subtask(
                 subtask_id="S2",
                 question="该常数项与引理编号如何对应？",
                 required_fact="对应引理 2",
                 needs_earlier_fact="常数项为 2τσ²",
+                probe="引理 2",
             ),
         ),
     )
@@ -127,18 +145,26 @@ def needs_revision_fixture() -> Fixture:
         goal="给出结论并附证据",
         constraints=("结论必须附证据", "不得只给结论"),
         requires_revision=True,
+        seed_records=(
+            "fact: 主结论 L ≤ 2τσ²，证据见定理 3（来源 2312.05134 第 7 节）",
+        ),
+        seed_summaries=(
+            "[证据] 主结论 L ≤ 2τσ²，证据见定理 3",
+        ),
         subtasks=(
             Subtask(
                 subtask_id="S1",
                 question="结论是什么？",
                 required_fact="L ≤ 2τσ²",
                 forbidden_method="只给结论",
+                probe="2τσ²",
             ),
             Subtask(
                 subtask_id="S2",
                 question="证据出处在哪里？",
                 required_fact="证据见定理 3",
                 needs_earlier_fact="L ≤ 2τσ²",
+                probe="定理 3",
             ),
         ),
     )
