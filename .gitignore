@@ -28,3 +28,10 @@ outputs/
 .idea/
 .vscode/
 .superpowers/
+
+# 由 dsh-ledger-memory 追加
+# ---- 台账活动日志（机器生成，不入库）----
+_ledger-log/
+
+# ---- 台账会话暂存（按需落盘，不入库）----
+_stash/

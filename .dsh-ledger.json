@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "active": "LEDGER.md",
+  "decisions": "DECISIONS.md",
+  "archiveDir": "_ledger-archive",
+  "maxActiveLines": 300,
+  "journal": "JOURNAL.md",
+  "goals": "GOALS.md",
+  "principles": "PRINCIPLES.md",
+  "lessons": "LESSONS.md",
+  "autoGitAdd": true,
+  "archiveWeekMode": "month",
+  "createdAt": "2026-10-28 10:34",
+  "protocolVersion": 2,
+  "updatedAt": "2026-10-28 13:30",
+  "logDir": "_ledger-log",
+  "revision": 33,
+  "decisionsDir": "decisions",
+  "lessonsDir": "lessons",
+  "goalsDir": "goals"
+}
