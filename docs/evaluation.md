@@ -59,7 +59,21 @@ for steps in (6, 12, 24, 40):
     print(steps, runs["full_history"].context_tokens, runs["graph_state"].context_tokens)
 ```
 
-脚本化研究者下这条曲线是确定性的；真实模型只影响"能不能答对"，不影响 token 计数（token 由策略的上下文决定）。
+跑判决实验（40 步、真 tokenizer、真实模型）：
+
+```bash
+set -a; . eval/.env; set +a
+export OPENCODE_COMPAT=1 OPENCODE_SESSION=atlas-eval-$(date +%s)
+.venv/bin/python scripts/run_runtime_eval.py --mode real \
+    --families long_horizon --long-steps 40 --repeats 2 --tokenizer tiktoken
+```
+
+口径说明（**报数字时必须一起给出**）：
+
+- "上下文 token"是**整条任务 40 步的累计值**（各步输入上下文求和），不是单次调用；
+- 计数用 `tiktoken/cl100k_base`；`--tokenizer words` 只是廉价代理，不能进简历；
+- 成本列 = 累计 token × 假定单价（默认 0.002/千 token），是**估算**，不是账单；
+- `temperature=0` 时重复运行结果可能完全一致，重复的作用是排除基础设施抖动，不是降低模型方差。
 注意 40 步时计划区自身可能超过组装预算，此时走的是**降级为计划区**的路径（与生产服务一致），必须留痕（`GraphStatePolicy.degraded_contexts`）。
 
 ## 6. 回放与排障

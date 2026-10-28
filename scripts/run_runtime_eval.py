@@ -21,9 +21,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+from atlas.evaluation.fixtures import FIXTURE_BUILDERS, long_horizon_fixture  # noqa: E402
 from atlas.evaluation import (  # noqa: E402
     ModelResearcher,
     build_policies,
+    count_words,
     grouped_metrics,
     load_fixtures,
     render_table,
@@ -72,12 +74,33 @@ def openai_compatible_llm(model: Optional[str] = None,
     return call
 
 
+def make_token_counter(kind: str):
+    """词数计数器便宜但只是代理；tiktoken 才是真 token（简历数字必须用它）。"""
+    if kind == "words":
+        return count_words
+    try:
+        import tiktoken
+
+        encoding = tiktoken.get_encoding("cl100k_base")
+
+        def count(text: str) -> int:
+            return len(encoding.encode(str(text or "")))
+
+        return count
+    except Exception as exc:  # pragma: no cover - 只在没装 tiktoken 时命中
+        raise SystemExit(f"--tokenizer tiktoken 不可用：{exc}")
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Atlas 长程运行时评测")
     parser.add_argument("--mode", choices=("offline", "real"), default="offline")
     parser.add_argument("--model", default="", help="real 模式使用的模型名")
     parser.add_argument("--repeats", type=int, default=1, help="real 模式重复次数（简历数字必须>1）")
     parser.add_argument("--out", default="", help="结果目录（默认 runs/runtime_eval_<mode>）")
+    parser.add_argument("--long-steps", type=int, default=12,
+                        help="long_horizon 家族的步数（默认 12；判决实验用 40）")
+    parser.add_argument("--tokenizer", choices=("words", "tiktoken"), default="words",
+                        help="上下文 token 计数口径；真实数字请用 tiktoken")
     parser.add_argument("--families", default="",
                         help="逗号分隔的 fixture 家族；空=默认三类（不含 long_horizon）")
     return parser
@@ -86,14 +109,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
     families = tuple(f for f in args.families.split(",") if f.strip()) or None
-    fixtures = load_fixtures(families) if families else load_fixtures()
-    policies = build_policies()
+    if families and families == ("long_horizon",):
+        fixtures = [long_horizon_fixture(args.long_steps)]
+        fixtures[0].validate()
+    else:
+        fixtures = load_fixtures(families) if families else load_fixtures()
+    counter = make_token_counter(args.tokenizer)
+    policies = build_policies(token_counter=counter)
     config = {
         "mode": args.mode,
         "model": args.model or os.environ.get("ATLAS_EVAL_MODEL", ""),
         "fixtures": [f.family for f in fixtures],
         "fixture_sizes": {f.family: len(f.subtasks) for f in fixtures},
+        "long_steps": args.long_steps,
         "policies": sorted(policies),
+        "tokenizer": args.tokenizer,
         "repeats": args.repeats,
         "honesty_note": (
             "offline = 脚本化研究者，仅验证指标口径；不得作为简历效果数字"

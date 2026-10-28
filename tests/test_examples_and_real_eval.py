@@ -145,3 +145,29 @@ class TestEvalEntryPoint:
         )
         assert result.returncode != 0
         assert "OPENAI_BASE_URL" in (result.stderr + result.stdout)
+
+
+class TestTokenCounter:
+    def test_tiktoken_counter_is_available_and_differs_from_words(self):
+        import sys as _sys
+
+        _sys.path.insert(0, str(ROOT / "scripts"))
+        from run_runtime_eval import make_token_counter
+
+        words = make_token_counter("words")
+        tokens = make_token_counter("tiktoken")
+        text = "引理 2 给出 L ≤ 2τσ²（来源 Theorem 3）"
+        assert tokens(text) > 0
+        assert tokens(text) != words(text)   # 词数只是代理，真 token 才能进简历
+
+    def test_arg_parser_exposes_long_steps_and_tokenizer(self):
+        import sys as _sys
+
+        _sys.path.insert(0, str(ROOT / "scripts"))
+        from run_runtime_eval import build_arg_parser
+
+        args = build_arg_parser().parse_args(
+            ["--mode", "real", "--families", "long_horizon", "--long-steps", "40",
+             "--tokenizer", "tiktoken"]
+        )
+        assert (args.long_steps, args.tokenizer) == (40, "tiktoken")
