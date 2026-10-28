@@ -162,12 +162,25 @@
 - **未完成且明确记录在文档里**：六配置表仍是旧措辞口径（严格 EM 偏低约 0.14）；三基准与同预算对照未跑；plan accuracy 只有弱代理。
 - 恢复方式：回一句「重跑六配置」或「先跑 C 臂」，按 `decisions/D11` 与最新交接单执行即可。
 
+## 2026-10-28 新计划：CompassRAG 全栈平台（Task 1–2 完成）
+
+- 计划来源：`/Users/szx/atlas/docs/superpowers/plans/2026-10-28-compassrag-fullstack-plan.md`（6 个 Task）。**Task 1 产品契约 + Task 2 可观察运行流已交付**，commit `0ce1edc`。
+- **契约**：`ResearchSubmit(async_mode)`、`RunSummary`（`queued → running → completed | failed | cancelled`）、`TraceEvent`、`ResearchSession`、`RunEnvelope(summary+trace)`；错误统一走 `ResearchResult.failure` 词表 + HTTP 404/422。
+- **事件**：`AgentState.step` 现在**同时**登记轨迹并把结构化事件投影给订阅者（step_id / parent / tool / query_source / outcome / latency_ms / tokens / evidence / round / ts）；`finish` 也会发事件。轨迹仍唯一真源。
+- **SSE**：`GET /runs/{id}/events` = 历史回放 + 实时订阅 + keepalive，客户端断开不影响 Agent 继续跑。
+- **取消**：`POST /runs/{id}/cancel` 协作式：`cancel_check` 在 plan/retrieve/prep/answer 节点入口检查，取消后不再发起新调用，终态 `cancelled`（`StopReason.CANCELLED`）。
+- **查询**：`GET /runs`（列表）、`GET /sessions/{session_id}`（会话分组）。
+- 测试 **240 passed**（新增异步/SSE/取消/会话/事件字段 6 条 + 既有 234 全部保持）。
+- 已知缺口：异步模式尚未强制执行 `timeout_s`（同步模式有）；`web/` 前端未开始；**前端工具链可用**（node v24.12 / npm 11.6）。
+- 下一步：Task 3 前端工作台（Vite + React + TS），或先补 Task 2 的异步超时。
+
 
 ## 变更登记（插件自动维护）
 
 > 这张表由插件**自动**维护：每次写台账 / 归档追加一行，只留最近 12 条（条数可在设置里调，项目清单里的 `changeRegisterMax` 优先）。
 > 完整历史在活动日志的 `L0-ledger-changes.md`（用 `ledger_log({view:"audit"})` 查）。
 
+- 2026-10-28 20:46:04 (append) [486c] +12 行 → 175 行 · revision→40
 - 2026-10-28 19:53:27 (append) [486c] +13 行 → 163 行 · revision→39
 - 2026-10-28 16:39:52 (append) [486c] +7 行 → 150 行 · revision→38
 - 2026-10-28 16:38:00 (append) [486c] +7 行 → 143 行 · revision→37
@@ -179,4 +192,3 @@
 - 2026-10-28 13:29:18 (append) [486c] +14 行 → 95 行 · revision→31
 - 2026-10-28 13:28:44 (append) [486c] +8 行 → 81 行 · revision→30
 - 2026-10-28 13:28:02 (append) [486c] +7 行 → 73 行 · revision→29
-- 2026-10-28 13:26:08 (replace) [486c] -176 行 → 66 行 · revision→28

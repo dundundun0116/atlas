@@ -12,9 +12,9 @@
   "archiveWeekMode": "month",
   "createdAt": "2026-10-28 10:34",
   "protocolVersion": 2,
-  "updatedAt": "2026-10-28 19:53",
+  "updatedAt": "2026-10-28 20:46",
   "logDir": "_ledger-log",
-  "revision": 39,
+  "revision": 40,
   "decisionsDir": "decisions",
   "lessonsDir": "lessons",
   "goalsDir": "goals"

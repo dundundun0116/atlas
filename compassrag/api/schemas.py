@@ -73,6 +73,7 @@ class ResearchSession(BaseModel):
 class RunEnvelope(BaseModel):
     found: bool
     summary: RunSummary | None = None
+    result: ResearchResult | None = None
     trace: dict[str, Any] | None = None
 
 

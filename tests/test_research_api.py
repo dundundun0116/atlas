@@ -313,3 +313,25 @@ def test_events_carry_latency_tool_and_outcome():
         assert key in payload, f"事件缺字段 {key}: {payload.keys()}"
     assert payload["tool"] == "bm25"
     assert payload["outcome"] == "ok"
+
+
+def test_async_timeout_is_reported_as_failed_timeout():
+    import time
+    client, _ = _client(tools={"bm25": SlowTool()})
+    run_id = client.post("/research", json={"query": "q", "async_mode": True,
+                                            "timeout_s": 0.1}).json()["run_id"]
+    time.sleep(0.2)
+    summary = _wait_terminal(client, run_id, timeout=15)
+    assert summary["status"] == "failed"
+    assert summary["failure"] == "timeout"
+    assert "timeout" in (summary["error"] or "")
+
+
+def test_research_async_endpoint_returns_202_and_queued_summary():
+    client, _ = _client()
+    r = client.post("/research/async", json={"query": "q", "session_id": "s-9"})
+    assert r.status_code == 202
+    body = r.json()
+    assert body["status"] == "queued" and body["run_id"]
+    summary = _wait_terminal(client, body["run_id"])
+    assert summary["status"] == "completed"

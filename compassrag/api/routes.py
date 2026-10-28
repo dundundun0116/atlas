@@ -27,7 +27,8 @@ from ..agent.core import Agent
 from ..agent.research import research
 from ..agent.schemas import ResearchRequest, ResearchResult
 from .events import EventPublisher, RunRegistry
-from .schemas import HealthResponse, ResearchSession, ResearchSubmit, RunEnvelope, RunSummary
+from .schemas import (HealthResponse, ResearchSession, ResearchSubmit, RunEnvelope,
+                      RunSummary, TraceEvent)
 from .store import TraceStore
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="compassrag-api")
@@ -69,6 +70,16 @@ def build_router(agent: Agent, *, store: TraceStore,
 
     def _execute(request: ResearchRequest, run_id: str) -> None:
         registry.update(run_id, status="running", started_at=time.time())
+        deadline = (time.time() + request.timeout_s) if request.timeout_s else None
+        timed_out = {"hit": False}
+
+        def cancelled() -> bool:
+            if registry.is_cancelled(run_id):
+                return True
+            if deadline is not None and time.time() >= deadline:
+                timed_out["hit"] = True
+                return True
+            return False
         publisher.publish(run_id, {"kind": "status", "ts": time.time(),
                                    "payload": {"status": "running"}})
 
@@ -82,16 +93,22 @@ def build_router(agent: Agent, *, store: TraceStore,
         try:
             result = research(agent, request, cache=cache, on_trace=store.put,
                               run_id=run_id, on_event=on_event,
-                              cancel_check=lambda: registry.is_cancelled(run_id))
+                              cancel_check=cancelled)
             trace = store.get(result.trace_id) or {}
             usage = trace.get("usage") or {}
             tokens = int(usage.get("prompt_tokens", 0)) + int(usage.get("completion_tokens", 0))
-            status = "cancelled" if result.stop_reason == "cancelled" else "completed"
+            if timed_out["hit"]:
+                status, failure = "failed", "timeout"
+                error = f"timeout after {request.timeout_s}s"
+            elif result.stop_reason == "cancelled":
+                status, failure, error = "cancelled", "cancelled", ""
+            else:
+                status, failure, error = "completed", result.failure, ""
             registry.update(run_id, status=status, trace_id=result.trace_id,
                             answer=result.answer, stop_reason=result.stop_reason,
-                            failure=result.failure, confidence=result.confidence,
+                            failure=failure, confidence=result.confidence, error=error,
                             rounds=result.retrieval_rounds, tokens=tokens,
-                            finished_at=time.time())
+                            result=result.model_dump(), finished_at=time.time())
             publisher.publish(run_id, {"kind": "finish", "ts": time.time(),
                                        "payload": {"status": status,
                                                    "stop_reason": result.stop_reason,
@@ -118,18 +135,21 @@ def build_router(agent: Agent, *, store: TraceStore,
 
     # -- 提交研究 -------------------------------------------------------- #
 
-    @router.post("/research", response_model=None)
-    def research_endpoint(payload: ResearchSubmit):
-        request = ResearchRequest(**payload.model_dump(exclude={"async_mode"}))
-        if payload.async_mode:
-            run_id = uuid.uuid4().hex[:12]
-            registry.create(run_id, request.query, session_id=request.session_id,
-                            subtask_id=request.subtask_id)
-            # 先快照再提交：保证响应里的状态就是 queued（不受后台线程抢先完成影响）
-            summary = RunSummary(**registry.get(run_id).as_summary())
-            _EXECUTOR.submit(_execute, request, run_id)
-            return summary
+    def _start_async(request: ResearchRequest) -> RunSummary:
+        run_id = uuid.uuid4().hex[:12]
+        registry.create(run_id, request.query, session_id=request.session_id,
+                        subtask_id=request.subtask_id)
+        # 先快照再提交：保证响应里的状态就是 queued（不受后台线程抢先完成影响）
+        summary = RunSummary(**registry.get(run_id).as_summary())
+        _EXECUTOR.submit(_execute, request, run_id)
+        return summary
 
+    @router.post("/research/async", response_model=RunSummary, status_code=202)
+    def research_async_endpoint(request: ResearchRequest) -> RunSummary:
+        """规范化异步入口：返回 202 + RunSummary(queued)，用 SSE 订阅进度。"""
+        return _start_async(request)
+
+    def _run_sync(request: ResearchRequest) -> ResearchResult:
         try:
             if request.timeout_s and request.timeout_s > 0:
                 future = _EXECUTOR.submit(research, agent, request, cache=cache,
@@ -148,6 +168,18 @@ def build_router(agent: Agent, *, store: TraceStore,
             return ResearchResult(answer="", failure="upstream_error",
                                   stop_reason="error", trace_id="")
 
+    @router.post("/research/sync", response_model=ResearchResult)
+    def research_sync_endpoint(request: ResearchRequest) -> ResearchResult:
+        """规范化同步入口：等答案返回 `ResearchResult`。"""
+        return _run_sync(request)
+
+    @router.post("/research", response_model=None)
+    def research_endpoint(payload: ResearchSubmit):
+        request = ResearchRequest(**payload.model_dump(exclude={"async_mode"}))
+        if payload.async_mode:
+            return _start_async(request)
+        return _run_sync(request)
+
     # -- 运行查询 -------------------------------------------------------- #
 
     @router.get("/runs", response_model=list[RunSummary])
@@ -163,7 +195,8 @@ def build_router(agent: Agent, *, store: TraceStore,
         if summary is None and trace is None:
             raise HTTPException(status_code=404,
                                 detail={"error": "not_found", "detail": run_id})
-        return RunEnvelope(found=True, summary=summary, trace=trace)
+        payload = ResearchResult(**rec.result) if (rec and rec.result) else None
+        return RunEnvelope(found=True, summary=summary, result=payload, trace=trace)
 
     @router.get("/sessions/{session_id}", response_model=ResearchSession)
     def get_session(session_id: str, include_traces: bool = False) -> ResearchSession:
@@ -172,6 +205,16 @@ def build_router(agent: Agent, *, store: TraceStore,
             raise HTTPException(status_code=404,
                                 detail={"error": "not_found", "detail": session_id})
         return ResearchSession(session_id=session_id, runs=runs)
+
+    @router.get("/runs/{run_id}/events/json", response_model=list[TraceEvent])
+    def events_json(run_id: str) -> list[TraceEvent]:
+        """事件历史（一次性拉取；SSE 用于实时流）。"""
+        if registry.get(run_id) is None:
+            raise HTTPException(status_code=404,
+                                detail={"error": "not_found", "detail": run_id})
+        return [TraceEvent(run_id=e["run_id"], seq=e.get("seq", 0), kind=e.get("kind", ""),
+                           ts=e.get("ts", 0.0), payload=e.get("payload") or {})
+                for e in publisher.history(run_id)]
 
     # -- 事件流（SSE） --------------------------------------------------- #
 

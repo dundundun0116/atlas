@@ -1,0 +1,912 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "CompassRAG ResearchTool",
+    "summary": "检索决策 Agent 对外接口：answer + evidence + confidence + stop_reason",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/research/async": {
+      "post": {
+        "summary": "Research Async Endpoint",
+        "description": "规范化异步入口：返回 202 + RunSummary(queued)，用 SSE 订阅进度。",
+        "operationId": "research_async_endpoint_research_async_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/research/sync": {
+      "post": {
+        "summary": "Research Sync Endpoint",
+        "description": "规范化同步入口：等答案返回 `ResearchResult`。",
+        "operationId": "research_sync_endpoint_research_sync_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/research": {
+      "post": {
+        "summary": "Research Endpoint",
+        "operationId": "research_endpoint_research_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResearchSubmit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs": {
+      "get": {
+        "summary": "List Runs",
+        "operationId": "list_runs_runs_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RunSummary"
+                  },
+                  "title": "Response List Runs Runs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{run_id}": {
+      "get": {
+        "summary": "Get Run",
+        "operationId": "get_run_runs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{session_id}": {
+      "get": {
+        "summary": "Get Session",
+        "operationId": "get_session_sessions__session_id__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "include_traces",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Traces"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchSession"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{run_id}/events/json": {
+      "get": {
+        "summary": "Events Json",
+        "description": "事件历史（一次性拉取；SSE 用于实时流）。",
+        "operationId": "events_json_runs__run_id__events_json_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TraceEvent"
+                  },
+                  "title": "Response Events Json Runs  Run Id  Events Json Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{run_id}/events": {
+      "get": {
+        "summary": "Stream Events",
+        "operationId": "stream_events_runs__run_id__events_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{run_id}/cancel": {
+      "post": {
+        "summary": "Cancel Run",
+        "operationId": "cancel_run_runs__run_id__cancel_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Cancel Run Runs  Run Id  Cancel Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "ok"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "default": ""
+          },
+          "embedding_model": {
+            "type": "string",
+            "title": "Embedding Model",
+            "default": ""
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tools"
+          },
+          "index": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Index"
+          },
+          "n_traces": {
+            "type": "integer",
+            "title": "N Traces",
+            "default": 0
+          },
+          "n_runs": {
+            "type": "integer",
+            "title": "N Runs",
+            "default": 0
+          },
+          "version": {
+            "type": "string",
+            "title": "Version",
+            "default": "0.1.0"
+          }
+        },
+        "type": "object",
+        "title": "HealthResponse"
+      },
+      "ResearchEvidence": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": ""
+          },
+          "chunk_id": {
+            "type": "string",
+            "title": "Chunk Id",
+            "default": ""
+          },
+          "quote": {
+            "type": "string",
+            "title": "Quote",
+            "default": ""
+          },
+          "score": {
+            "type": "number",
+            "title": "Score",
+            "default": 0.0
+          },
+          "retriever": {
+            "type": "string",
+            "title": "Retriever",
+            "default": ""
+          },
+          "rank": {
+            "type": "integer",
+            "title": "Rank",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "ResearchEvidence",
+        "description": "对外证据项：Atlas 只需要\"哪篇文章的哪段原文支持了答案\"，不需要内部块结构。"
+      },
+      "ResearchRequest": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "default": ""
+          },
+          "subtask_id": {
+            "type": "string",
+            "title": "Subtask Id",
+            "default": ""
+          },
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "budget_tokens": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Budget Tokens",
+            "default": 0
+          },
+          "max_rounds": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Max Rounds",
+            "default": 2
+          },
+          "idempotency_key": {
+            "type": "string",
+            "title": "Idempotency Key",
+            "default": ""
+          },
+          "timeout_s": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Timeout S",
+            "default": 0.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "ResearchRequest",
+        "description": "Atlas 调用 CompassRAG 的请求（阶段 A 契约，阶段 E 由 API 复用）。"
+      },
+      "ResearchResult": {
+        "properties": {
+          "answer": {
+            "type": "string",
+            "title": "Answer",
+            "default": ""
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchEvidence"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "default": 0.0
+          },
+          "retrieval_rounds": {
+            "type": "integer",
+            "title": "Retrieval Rounds",
+            "default": 0
+          },
+          "stop_reason": {
+            "type": "string",
+            "title": "Stop Reason",
+            "default": ""
+          },
+          "trace_id": {
+            "type": "string",
+            "title": "Trace Id",
+            "default": ""
+          },
+          "failure": {
+            "type": "string",
+            "enum": [
+              "",
+              "timeout",
+              "budget_exhausted",
+              "no_evidence",
+              "upstream_error",
+              "invalid_request",
+              "cancelled"
+            ],
+            "title": "Failure",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "ResearchResult",
+        "description": "对外响应：答案 + 结构化证据 + 置信度 + 停止原因 + trace 指针。"
+      },
+      "ResearchSession": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/RunSummary"
+            },
+            "type": "array",
+            "title": "Runs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id"
+        ],
+        "title": "ResearchSession",
+        "description": "一次会话（Atlas 的一个子任务上下文）里的运行集合。"
+      },
+      "ResearchSubmit": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "default": ""
+          },
+          "subtask_id": {
+            "type": "string",
+            "title": "Subtask Id",
+            "default": ""
+          },
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "budget_tokens": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Budget Tokens",
+            "default": 0
+          },
+          "max_rounds": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Max Rounds",
+            "default": 2
+          },
+          "idempotency_key": {
+            "type": "string",
+            "title": "Idempotency Key",
+            "default": ""
+          },
+          "timeout_s": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Timeout S",
+            "default": 0.0
+          },
+          "async_mode": {
+            "type": "boolean",
+            "title": "Async Mode",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "ResearchSubmit",
+        "description": "提交一次研究任务。`async_mode=True` 时立刻返回 run_id，用 SSE 订阅进度。"
+      },
+      "RunEnvelope": {
+        "properties": {
+          "found": {
+            "type": "boolean",
+            "title": "Found"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trace": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace"
+          }
+        },
+        "type": "object",
+        "required": [
+          "found"
+        ],
+        "title": "RunEnvelope"
+      },
+      "RunSummary": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question",
+            "default": ""
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "default": ""
+          },
+          "subtask_id": {
+            "type": "string",
+            "title": "Subtask Id",
+            "default": ""
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "default": "queued"
+          },
+          "trace_id": {
+            "type": "string",
+            "title": "Trace Id",
+            "default": ""
+          },
+          "answer": {
+            "type": "string",
+            "title": "Answer",
+            "default": ""
+          },
+          "stop_reason": {
+            "type": "string",
+            "title": "Stop Reason",
+            "default": ""
+          },
+          "failure": {
+            "type": "string",
+            "title": "Failure",
+            "default": ""
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence",
+            "default": 0.0
+          },
+          "rounds": {
+            "type": "integer",
+            "title": "Rounds",
+            "default": 0
+          },
+          "tokens": {
+            "type": "integer",
+            "title": "Tokens",
+            "default": 0
+          },
+          "n_events": {
+            "type": "integer",
+            "title": "N Events",
+            "default": 0
+          },
+          "created_at": {
+            "type": "number",
+            "title": "Created At",
+            "default": 0.0
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "error": {
+            "type": "string",
+            "title": "Error",
+            "default": ""
+          },
+          "cancelled": {
+            "type": "boolean",
+            "title": "Cancelled",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id"
+        ],
+        "title": "RunSummary"
+      },
+      "TraceEvent": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "seq": {
+            "type": "integer",
+            "title": "Seq",
+            "default": 0
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": ""
+          },
+          "ts": {
+            "type": "number",
+            "title": "Ts",
+            "default": 0.0
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id"
+        ],
+        "title": "TraceEvent",
+        "description": "SSE 流里的一个事件：轨迹步骤的实时投影。"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

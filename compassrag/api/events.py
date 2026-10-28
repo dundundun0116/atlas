@@ -37,6 +37,7 @@ class RunRecord:
     n_events: int = 0
     error: str = ""
     cancelled: bool = False
+    result: dict[str, Any] | None = None
 
     @property
     def is_terminal(self) -> bool:

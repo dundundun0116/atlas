@@ -35,3 +35,8 @@ _ledger-log/
 
 # ---- 台账会话暂存（按需落盘，不入库）----
 _stash/
+
+# ---- 前端 ----
+web/node_modules/
+web/dist/
+web/coverage/
