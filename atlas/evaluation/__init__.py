@@ -31,6 +31,7 @@ from atlas.evaluation.policies import (
     MemoryState,
     NarrativeSummaryPolicy,
     build_policies,
+    count_words,
 )
 from atlas.evaluation.replay import load_run, replay, replay_metrics, replay_table, save_run
 
@@ -54,6 +55,7 @@ __all__ = [
     "Subtask",
     "aggregate",
     "build_policies",
+    "count_words",
     "failing_runs",
     "grouped_metrics",
     "load_fixtures",
