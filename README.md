@@ -9,34 +9,45 @@
 - **检索决策层**：LLM 接管控制流——问题路由（直答 / 单跳 / 多跳）、子问题计划、逐轮检索、证据充分度早停、预算上限。实测 50 题中 37 题提前收手，自适应 1-3 轮。
 - **实体图索引**（HippoRAG 式）：逐块用 LLM 抽取实体与关系三元组，构建跨文档实体图（同义边消歧），查询时以查询实体为种子跑 Personalized PageRank——用图上游走单步完成"多跳联想"，作为与 BM25 / 稠密向量**等权互补**的第三路检索信号。
 - **查询改写融合**：多跳分解 + HyDE 假答案改写 + 多路 RRF 融合与近重合并。
+- **证据闭环**：答案之外再调一次 verifier 把答案拆成 claims，**引用编号由代码校验**（越界/引空/不存在一律判不支持）；失败分五类（query miss / evidence gap / source conflict / unsupported / tool failure），每类一个有限修复动作，修不成就拒答，不硬编。
+- **可回放与可服务化**：每题一份 `AnswerTrace`（查询来源、工具 retriever/rank、证据、claims、停止原因、用量），配 manifest 指纹与四列表报表；对外通过 `ResearchTool` 协议（本地 adapter / HTTP `/research`）被上层 Agent 调用。
 
 ## 结果一览
 
 **同题集消融阶梯**（MuSiQue dev 分层抽样 50 题；行间严格同题集可比，绝对数字随语料规模变化）：
 
-| 配置 | EM | F1 | 证据召回@10 | token/题 |
-|---|---|---|---|---|
-| naive（单轮固定检索） | 0.300 | 0.422 | 0.720 | 3,927 |
-| + 查询改写融合 | 0.400 | 0.553 | 0.720 | 4,541 |
-| + 实体图索引 | 0.400 | 0.544 | **0.813** | **3,346** |
-| + 检索决策层 | 0.480 | **0.662** | 0.537\* | 16,071 |
-| **全家桶（三者全开）** | **0.500** | 0.621 | 0.538\* | 14,682 |
+> **2026-10-28 用新管线（Pydantic 契约 / 工具协议 / 证据闭环 / LangGraph）重测**；行间同题集、同语料、同预算口径，全部 50 题。
+> 检索侧与旧版逐位一致（naive 与 +rewrite 的召回、证据完全复现）；EM 与旧值相差 ±2–4 题的原因是**答案表面形式漂移**（如 `10 June 1819` → `June 10, 1819`），不是检索或逻辑退化——判读详见 `decisions/D6`、`D7`。
 
-\* 决策行证据为逐轮累积，@10 只统计第一轮，名义值偏低；全表原始口径，非空口径（43 题）全家桶 EM/F1 = 0.535 / 0.676。
+| 配置 | EM（严格） | EM（宽松\*\*） | F1 | 证据召回@10 | full-hit@10 | token/题 |
+|---|---|---|---|---|---|---|
+| naive（单轮固定检索） | 0.300 | 0.440 | 0.432 | 0.720 | 0.460 | 2,162 |
+| + 查询改写融合 | 0.400 | 0.560 | 0.575 | 0.720 | 0.460 | 3,540 |
+| + 实体图索引 | 0.360 | 0.540 | 0.512 | **0.813** | **0.600** | **2,022** |
+| + 检索决策层 | 0.440 | 0.620 | 0.622 | 0.523\* | 0.220\* | 11,935 |
+| + 全家桶（三者全开） | 0.460 | 0.600 | 0.599 | 0.522\* | 0.240\* | 11,834 |
+| + 证据核验与有限修复 | 0.420 | **0.640** | 0.604 | 0.542\* | 0.280\* | 20,087 |
+
+\* 决策行证据为逐轮累积，@10 只统计第一轮，名义值偏低。
+\*\* **宽松 EM 是诊断口径，不是主指标**：金标 token 集合被预测包含即算命中（去括号、忽略日期顺序），用来量化"答案写了 `661 CE` 而金标是 `661`"这类格式损失。它比严格 EM 高 0.14–0.22，说明这套模型普遍答得太"完整"。论文可比口径仍以严格 EM 为准，简历主数字也只写严格 EM。
 
 几个值得单看的数字：
 
-- **决策层的成本叙事**：自适应 1-3 轮 + 充分度早停（37/50 提前收手），比 naive 高 **+18pp EM**（0.300→0.480）；代价是约 4 倍 token。
-- **实体图在检索层**：三路等权融合把"两跳证据全捞到"的比例（full_hit@20）从 0.487 提到 **0.620（+27% 相对）**，且单路就比两路混合强（0.503 vs 0.487）；纯图检索还**最省 token**。
-- **机制分工**：查询改写不改证据召回（0.720→0.720），提升的是"给定证据的作答质量"；实体图提升的是"证据覆盖"（+9.3pp）——两者正交，这是消融拆开才看得见的结论。
-- **负结果留档**：最初实现的 wiki 式分层摘要索引，在加权融合 / 条目先验重排 / 准入制补捞三种修订试尽后仍无净增益，oracle 上限实验证明其检索层天花板仅 +0.8pp——随即切换到实体图路线。完整实验记录在 [PROJECT.md](PROJECT.md)。
+- **决策层的成本叙事**：自适应 1–3 轮（35/50 提前收手），比 naive 高 **+14pp EM**（0.300→0.440），代价是 **5.5× token**。token 倍率比旧版记录的 4.1× 更高，因为新版几乎没有空答案重试，naive 基线本身变便宜了（同一配置 prompt 逐字节一致，token 差 45%——见 D6）。
+- **实体图在检索层**：三路等权融合把"两跳证据全捞到"的比例（full-hit）从 0.460 提到 **0.600**，召回率 0.720→**0.813**，而且**最省 token**（2,022/题）。
+- **证据核验这一行：严格 EM 看着是负结果，宽松口径下其实是最好的**。严格 EM 0.420（比全家桶少 2 题），但**宽松 EM 0.640 为全表最高**；逐题看，严格口径 +4/−6、宽松口径 +4/−2。也就是说：**核验层确实提高了"实质上答对"的比例，代价是答案更长、被精确匹配扣掉**。claim support 0.885、修复触发 10 次成功 4 次、6 题改成拒答（其中 5 题原本就是错的）。这件事的教训比数字重要：**先排除口径因素，再判一个模块有没有用**（`decisions/D10`）。
+- **token 效率（EM 每千 token）**：naive 0.139 · 改写 0.113 · **实体图 0.178（最高）** · 决策 0.037 · 全家桶 0.039 · 核验 0.021。也就是说实体图不仅在准确率和证据覆盖上更好，**还比 naive 更便宜**（2,022 vs 2,162 token/题）；决策层是"花 5.5 倍 token 换 +14pp"，核验层是"花 9 倍换口径存疑的收益"。注意这是**跨配置的效率对照**，不等于"把决策层压到同样预算还能保持 0.44"——真正的同预算对照需要重跑（待预算）。
+- **路由准确率（弱金标）**：决策三行（decision / full / verify）的"路由 vs 跳数"一致率均为 **0.980**（2-hop 0.96，3/4-hop 1.00，n=50）。MuSiQue 没有人工标注的检索计划，这里用"1 跳应为 single、≥2 跳应为 multi"当弱规则；它只能说明路由没离谱，不等于计划质量（见 `decisions/D9`）。
+- **负结果留档**：wiki 式分层摘要索引在加权融合 / 条目先验 / 准入补捞三种修订后仍无净增益，oracle 上限仅 +0.8pp，随后切换到实体图路线。
+
+历史口径（上一代主循环，2026-10-12）：naive 0.300/0.422 · +改写 0.400/0.553 · +实体图 0.400/0.544 · +决策 0.480/0.662 · 全家桶 0.500/0.621。两次测得的检索侧指标一致，差异集中在答案风格。
 
 ## 快速开始 Quickstart
 
 ```bash
 # 1. Setup（Python ≥ 3.10）
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dense]"          # dense extra = 本地 BGE-M3 稠密检索
+pip install -e ".[dense]"          # dense extra = 本地 BGE-M3 稠密检索；服务化再加 ".[dense,api]"
 cp .env.example .env               # 填入任意 OpenAI 兼容端点：LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
 
 # 2. 验证 LLM 通道
@@ -57,6 +68,30 @@ python scripts/eval_qa.py --benchmarks musique --variant samples \
     --config configs/ablation/plus_full.yaml --limit 50
 ```
 
+### 作为 ResearchTool 被调用
+
+```python
+from compassrag.agent import Agent, AgentConfig, ResearchRequest
+from compassrag.adapters import LocalResearchTool
+
+tool = LocalResearchTool(Agent(llm, tools, chunk_store, AgentConfig(use_decision=True)))
+out = tool.research(ResearchRequest(query="...", budget_tokens=4000, max_rounds=2,
+                                    idempotency_key="S3-attempt-1"))
+# out.answer / out.evidence[*].quote / out.confidence / out.stop_reason / out.trace_id
+```
+
+服务化（装配真实索引；`--check` 只体检不监听、不调模型）：
+
+```bash
+python scripts/serve_api.py --config configs/ablation/plus_full.yaml --check   # 打印索引规模/版本
+python scripts/serve_api.py --port 8000    # POST /research · GET /runs/{trace_id} · GET /health
+```
+
+`failure` 是结构化失败信号：`no_evidence` / `budget_exhausted` / `upstream_error` / `timeout` / `invalid_request`；
+模型回 `unknown` 也算 `no_evidence`（有证据但没答出来），此时 `confidence=0`。
+
+失败也是结构化结果：`no_evidence` / `budget_exhausted` / `upstream_error` / `timeout` / `invalid_request`。
+
 复现实验小贴士：所有批量脚本都带**断点续跑**（按 id / 块 id 增量落盘，中断后原命令重跑即可）；`--variant samples` 表示"抽样题小库"，不带则用全量 dev 语料库；`configs/ablation/` 每个文件就是一个消融级别。
 
 ## 项目结构
@@ -64,28 +99,37 @@ python scripts/eval_qa.py --benchmarks musique --variant samples \
 ```
 compassrag/
 ├── compassrag/
-│   ├── agent.py          # agent 主循环：scripted 固定流程 / LLM 决策流程两种形态
+│   ├── agent/            # 控制流与契约
+│   │   ├── schemas.py    #   Pydantic：Route/SearchRequest/ToolCall/Claim/AnswerTrace/ResearchResult
+│   │   ├── tools.py      #   统一工具协议（六类 outcome，异常不外泄）
+│   │   ├── state.py      #   运行状态与四类预算（轮数 / token / 延迟 / 费用）
+│   │   ├── core.py       #   顺序实现：plan → retrieve* → verify* → answer（对照基线）
+│   │   ├── graph.py      #   LangGraph 控制流（与 core 由对照测试锁死）
+│   │   └── research.py   #   ResearchResult 适配层
+│   ├── diagnose/         # 证据闭环：claim 核验（verifier）+ 五类失败与有限修复（repair）
+│   ├── api/              # 阶段 E：FastAPI 三端点 + trace 存储
+│   ├── adapters/         # 阶段 E：Atlas 本地 / HTTP adapter（同一 ResearchTool 协议）
 │   ├── decision/         # 决策层：路由与计划（planner）+ 充分度早停（sufficiency）
-│   ├── query/            # 查询侧：多跳分解 + HyDE 改写
+│   ├── query/            # 查询侧：多跳分解 + HyDE 改写（带来源标注）
 │   ├── index/            # 索引：实体关系图（kg.py，含 PPR）+ wiki 摘要索引（负结果留档）
 │   ├── retrieval/        # BM25 / BGE-M3 稠密 / RRF 融合与近重合并
 │   ├── corpus/           # 基准接入、分层抽样、分块
-│   ├── eval/             # EM / F1 / 证据召回指标 + 断点续跑评测骨架
-│   └── llm/              # openai 兼容客户端 + 逐调用 token 遥测
+│   ├── eval/             # 指标 / 断点续跑 / traces（轨迹+派生行两层）/ manifest / report
+│   └── llm/              # openai 兼容客户端 + 逐调用 token 遥测（IPv4 出口与离线模型说明见 .env.example）
 ├── configs/
 │   ├── models.yaml       # 端点与请求参数
 │   └── ablation/         # naive / plus_rewrite / plus_kg / plus_decision / plus_full
-├── scripts/              # 语料构建 / 向量化 / 建图 / NER / 检索评测 / QA 评测 / 冒烟
+├── scripts/              # 语料构建 / 向量化 / 建图 / NER / 检索评测 / QA 评测 / 报表 / 基准缺口检查
 ├── data/samples/         # 三基准 300 题分层抽样清单（seed=42，入仓可复现）
 ├── docs/assets/          # 架构图（.pptx 可编辑源 + 渲染 PNG）
-└── tests/                # 单测套件（116 项）
+└── tests/                # 单测套件（218 项，全部无需真实 API）
 ```
 
 ## 现状与路线图
 
-- ✅ 已完成：三基准接入与分层抽样；BM25 + BGE-M3 混合检索；实体图索引（建图 / PPR 检索 / 接入 agent）；查询改写融合；检索决策层（路由 / 计划 / 早停 / 预算 / 成本遥测）；同题集消融阶梯五级出数。
-- 🚧 进行中：README 与文档打磨；答案生成的冗长问题（F1 口径）统一处理。
-- 📌 路线图：MultiHop-RAG（含 null query 的拒答检测）与 FRAMES（三轴 LLM-judge）基准接入；CLI / Streamlit 交互 demo（决策过程时间线）；扩题到 100 题的正式全量表。
+- ✅ 已完成：三基准接入与分层抽样；BM25 + BGE-M3 混合检索；实体图索引（建图 / PPR 检索 / 接入 agent）；查询改写融合；检索决策层（路由 / 计划 / 早停 / 预算）；**统一工具协议与 Pydantic 契约**；**证据闭环（claim 核验 + 五类失败 + 有限修复 + 拒答）**；**逐题 trace / manifest / 回放 / 四列表报表**；**LangGraph 控制流（与顺序实现对照等价）**；**ResearchTool 服务化与 Atlas adapter**。
+- 🚧 进行中：六配置在新管线上的重跑（含 `plus_verify` 行）与同预算对照；README 与文档打磨。
+- 📌 路线图：MultiHop-RAG（含 null query 的拒答检测）与 FRAMES（三轴 LLM-judge）基准接入；三基准正式结果（当前仅 MuSiQue）；CLI / 交互 demo；扩题到 100 题。
 
 **已知局限**：消融数字来自单一基准（MuSiQue）的 50 题子集；实体抽取依赖 LLM（建索引成本随语料线性增长）；决策行的证据召回按逐轮累积计量，与单轮行的 @k 口径不完全对齐（表中已标注）。
 

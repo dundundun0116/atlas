@@ -6,6 +6,7 @@
 """
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -34,7 +35,14 @@ class LocalDenseEmbedder:
     def _ensure(self):
         if self._model is None:
             from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(self.model_name, device=self.device)
+            # 离线优先：模型已在本地缓存时不要再连 HF（连不上的网络里会卡在 SYN_SENT，
+            # 表现为"评测没输出、CPU 0%）。要重新下载就设 HF_ALLOW_DOWNLOAD=1。
+            offline = os.environ.get("HF_ALLOW_DOWNLOAD", "0") != "1"
+            try:
+                self._model = SentenceTransformer(self.model_name, device=self.device,
+                                                  local_files_only=offline)
+            except TypeError:   # 旧版 sentence-transformers 没有这个参数
+                self._model = SentenceTransformer(self.model_name, device=self.device)
             self._model.max_seq_length = self.max_length
         return self._model
 

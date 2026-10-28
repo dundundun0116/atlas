@@ -32,6 +32,7 @@ class Sufficiency:
     ok: bool = True
     next_query: str = ""
     calls: list = field(default_factory=list)   # 本次决策消耗的 LLM 调用（供成本聚合）
+    parsed: bool = True                         # False = 解析全败后的安全降级（判为"充分"）
 
 
 def parse_sufficiency_json(text: str) -> dict | None:
@@ -64,5 +65,7 @@ def check_sufficiency(llm, question: str, evidence_text: str,
         calls.append(resp)
         parsed = parse_sufficiency_json(resp.text)
         if parsed is not None:
-            return Sufficiency(ok=parsed["sufficient"], next_query=parsed["next_query"], calls=calls)
-    return Sufficiency(ok=True, next_query="", calls=calls)
+            return Sufficiency(ok=parsed["sufficient"], next_query=parsed["next_query"],
+                               calls=calls, parsed=True)
+    # 解析全败 → 降级为"充分"（停止循环，宁可少查一轮也不无限烧预算）
+    return Sufficiency(ok=True, next_query="", calls=calls, parsed=False)

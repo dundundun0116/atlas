@@ -47,6 +47,8 @@ class Plan:
     route: str = ROUTE_SINGLE
     subquestions: list[str] = field(default_factory=list)
     calls: list = field(default_factory=list)   # 本次决策消耗的 LLM 调用（供成本聚合）
+    parsed: bool = True                         # False = 解析全败后的安全降级
+    fallback_reason: str = ""
 
 
 def parse_plan_json(text: str) -> dict | None:
@@ -79,5 +81,6 @@ def make_plan(llm, question: str, *, budgets: tuple = PLAN_BUDGETS, max_sub: int
         parsed = parse_plan_json(resp.text)
         if parsed is not None:
             subs = [s for s in parsed["subquestions"] if s.strip()][:max_sub]
-            return Plan(route=parsed["route"], subquestions=subs, calls=calls)
-    return Plan(route=ROUTE_SINGLE, subquestions=[], calls=calls)
+            return Plan(route=parsed["route"], subquestions=subs, calls=calls, parsed=True)
+    return Plan(route=ROUTE_SINGLE, subquestions=[], calls=calls,
+                parsed=False, fallback_reason="plan_parse_failed")

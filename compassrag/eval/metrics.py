@@ -36,6 +36,28 @@ def best_over_golds(prediction: str, golds: list[str], metric) -> float:
     return max((metric(prediction, g) for g in golds), default=0.0)
 
 
+_PAREN = re.compile(r"\([^)]*\)|\[[^\]]*\]")
+
+
+def normalize_relaxed(text: str) -> set[str]:
+    """宽松匹配用的 token 集合：去括号补充说明、去标点、小写、去冠词。
+
+    只用于**诊断指标**，不改主口径 EM：`661 CE` 与 `661`、`10 June 1819` 与 `June 10, 1819`
+    在集合层面相等，但用 SQuAD 精确匹配都会判错。把差多少题归因到格式上，比拍脑袋说
+    "模型变啰嗦了" 有用。
+    """
+    text = _PAREN.sub(" ", (text or "").lower())
+    return set(squad_normalize(text).split())
+
+
+def relaxed_em(prediction: str, gold: str) -> float:
+    """金标 token 集合被预测集合包含即算命中（诊断口径，不替代 em_score）。"""
+    g = normalize_relaxed(gold)
+    if not g:
+        return 0.0
+    return float(g <= normalize_relaxed(prediction))
+
+
 def recall_at_k(retrieved_titles: list[str], gold_titles: set[str], k: int) -> float:
     """top-k 检索结果覆盖的支撑标题比例（支撑标题去重后计）。"""
     if not gold_titles:

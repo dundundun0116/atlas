@@ -35,6 +35,23 @@ class LLMError(RuntimeError):
     pass
 
 
+def _make_http_client(timeout: float):
+    """强制 IPv4 出口。
+
+    某些网络环境下 DNS 会先返回一个 Teredo（2001::/32）AAAA 地址，httpx 选中它后
+    TCP 一直停在 SYN_SENT，表现为"跑评测没输出、CPU 0%"。把本地出口绑到 0.0.0.0
+    就只走 IPv4。`LLM_FORCE_IPV4=0` 可关闭。
+    """
+    if os.environ.get("LLM_FORCE_IPV4", "1") == "0":
+        return None
+    try:
+        import httpx
+        return httpx.Client(transport=httpx.HTTPTransport(local_address="0.0.0.0"),
+                            timeout=timeout)
+    except Exception:  # noqa: BLE001 - 拿不到就直接用默认客户端
+        return None
+
+
 def batch_texts(texts: list, batch_size: int) -> list[list]:
     return [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
 
@@ -64,14 +81,16 @@ class LLMClient:
         timeout = float(req.get("timeout_s", 120))
         retries = int(req.get("max_retries", 4))
         self._client = OpenAI(base_url=base, api_key=key, timeout=timeout, max_retries=retries,
-                              default_headers=default_headers)
+                              default_headers=default_headers,
+                              http_client=_make_http_client(timeout))
 
         e_base = os.environ.get("EMBEDDING_BASE_URL") or base
         e_key = os.environ.get("EMBEDDING_API_KEY") or key
         self.embedding_model = os.environ.get("EMBEDDING_MODEL") or ""  # 不回退主模型：embed 端点与 chat 不同族
         self._embed_client = self._client if (e_base == base and e_key == key) else \
             OpenAI(base_url=e_base, api_key=e_key, timeout=timeout, max_retries=retries,
-                   default_headers=default_headers)
+                   default_headers=default_headers,
+                   http_client=_make_http_client(timeout))
         self._batch_size = int(cfg.get("embedding", {}).get("batch_size", 96))
 
         tel_path = telemetry_path or self.root / cfg.get("telemetry", {}).get("path", "runs/telemetry.jsonl")

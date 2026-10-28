@@ -79,13 +79,31 @@ def hyde(llm, question: str) -> str:
                         tag="hyde", accept=lambda t: bool(t.strip())).strip()
 
 
+SOURCE_ORIGINAL = "original"
+SOURCE_SUBQUESTION = "subquestion"
+SOURCE_HYDE = "hyde"
+
+
+def build_query_variants_sourced(llm, question: str,
+                                 *, max_sub: int = MAX_SUBQUESTIONS) -> list[tuple[str, str]]:
+    """`build_query_variants` 的来源标注版：返回 [(查询, 来源)]。
+
+    来源是轨迹的一部分——评测要能回答"这条查询为什么会存在"，否则 HyDE 与子问题
+    的贡献无法分开归因。
+    """
+    variants: list[tuple[str, str]] = [(question, SOURCE_ORIGINAL)]
+    seen = {question}
+    for q in decompose(llm, question, max_sub=max_sub):
+        if q not in seen:
+            seen.add(q)
+            variants.append((q, SOURCE_SUBQUESTION))
+    h = hyde(llm, question)
+    if h and h not in seen:
+        seen.add(h)
+        variants.append((h, SOURCE_HYDE))
+    return variants
+
+
 def build_query_variants(llm, question: str, *, max_sub: int = MAX_SUBQUESTIONS) -> list[str]:
     """检索用查询变体 = 原问题 + 子问题（≤max_sub）+ HyDE 假答案段落。"""
-    variants = [question]
-    for q in decompose(llm, question, max_sub=max_sub):
-        if q not in variants:
-            variants.append(q)
-    h = hyde(llm, question)
-    if h and h not in variants:
-        variants.append(h)
-    return variants
+    return [q for q, _ in build_query_variants_sourced(llm, question, max_sub=max_sub)]
