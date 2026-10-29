@@ -88,6 +88,14 @@ class TestModelResearcher:
         )
         assert outcome["completed"] is False
 
+    def test_chinese_question_subject_is_detected(self):
+        fixture = self._fixture()
+        answer = "代入引理 2 的界后，递推式得到 +4γ。"
+        outcome = ModelResearcher(fixture, lambda _prompt: answer).answer(
+            fixture.subtasks[1], "上下文"
+        )
+        assert outcome["completed"] is True
+
     def test_missing_fact_is_not_completed(self):
         fixture = self._fixture()
         outcome = ModelResearcher(fixture, lambda p: "无法确定").answer(fixture.subtasks[0], "")

@@ -117,9 +117,12 @@ def contains_probe(answer: str, probe: str) -> bool:
 def answer_mentions_subject(answer: str, question: str) -> bool:
     """要求答案同时提及问题主体，避免单独复述一个数字被判正确。"""
     normalized_answer = normalize_text(answer)
-    candidates = re.findall(
-        r"[一-龥]{2,}|[a-zA-Z][a-zA-Z0-9_]{1,}|\d+", str(question or "")
-    )
+    raw_question = str(question or "")
+    candidates = re.findall(r"[A-Za-z][A-Za-z0-9_]{1,}|\d+", raw_question)
+    for chunk in re.findall(r"[一-龥]{2,}", raw_question):
+        # 中文没有空格分词；用二字短语覆盖“引理/递推式/常数项”等主体，
+        # 避免把整句当作一个不可命中的 token。
+        candidates.extend(chunk[index:index + 2] for index in range(len(chunk) - 1))
     ignored = {"多少", "什么", "如何", "哪个", "取值", "得到", "给出", "最终", "对应"}
     subjects = [
         normalize_text(item)
