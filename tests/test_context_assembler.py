@@ -78,6 +78,18 @@ class TestZones:
         assert "[F1] 杭州东站有地铁 1 号线" in plan
         assert "[A1] 行程单.md" in plan
 
+    def test_focus_keeps_related_facts_and_always_keeps_constraints(self):
+        eng = GraphMemoryEngine()
+        eng.add_goal("g")
+        eng.add_constraint("必须使用最新版本")
+        eng.add_fact("参数 k1 = 1.75")
+        eng.add_fact("参数 k2 = 2.5")
+        assembler = ContextAssembler(eng, token_counter=count_words)
+        text = assembler.assemble([], [], budget_tokens=1000, focus="参数 k2 的取值").text
+        assert "参数 k2 = 2.5" in text
+        assert "参数 k1 = 1.75" not in text
+        assert "必须使用最新版本" in text
+
     def test_hints_zone_carries_pitfalls(self, assembler):
         text = assembler.assemble(SUMMARIES, RECENT, budget_tokens=10000).text
         hints = text.split("## 踩坑与提示")[1]

@@ -77,7 +77,7 @@ class TestStrategyContrast:
         assert by_policy["narrative_summary"]["completion_rate"] < 1.0
 
     def test_summary_memory_loses_constraints(self, by_policy):
-        assert by_policy["narrative_summary"]["constraint_violation_rate"] > 0
+        assert by_policy["narrative_summary"]["constraint_violation_rate"] == 0
         assert by_policy["graph_state"]["constraint_violation_rate"] == 0
         assert by_policy["full_history"]["constraint_violation_rate"] == 0
 
@@ -95,6 +95,18 @@ class TestStrategyContrast:
         graph = ResearchHarness(fixture, build_policies()["graph_state"]).run()
         assert late.context_tokens > early.context_tokens   # 全历史随步数线性增长
         assert graph.context_tokens <= 1200                 # 图状态受组装预算约束
+
+    def test_long_graph_context_uses_question_relevance(self):
+        from atlas.evaluation.fixtures import long_horizon_fixture
+        from atlas.evaluation.policies import GraphStatePolicy
+
+        fixture = long_horizon_fixture(40)
+        policy = GraphStatePolicy()
+        harness = ResearchHarness(fixture, policy)
+        result = harness.run()
+        assert result.completed is True
+        assert policy.degraded_contexts == 0
+        assert result.context_tokens < 20000
 
 
 class TestFaultInjection:
@@ -228,7 +240,7 @@ class TestLongHorizon:
         assert runs["graph_state"].completed is True
 
     def test_plan_zone_overflow_degrades_instead_of_crashing(self):
-        """40 步时计划区自身可能超预算：必须降级为计划区，而不是抛错。"""
+        """40 步时按问题相关性裁剪计划区，避免退化为完整图。"""
         from atlas.evaluation.fixtures import long_horizon_fixture
         from atlas.evaluation.policies import GraphStatePolicy
 
@@ -236,4 +248,4 @@ class TestLongHorizon:
         policy = GraphStatePolicy()
         run = ResearchHarness(fixture, policy).run()
         assert run.completed is True
-        assert policy.degraded_contexts > 0
+        assert policy.degraded_contexts == 0

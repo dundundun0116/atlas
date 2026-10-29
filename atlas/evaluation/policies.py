@@ -64,10 +64,10 @@ class NarrativeSummaryPolicy(MemoryPolicy):
     name = "narrative_summary"
 
     def context(self, state: MemoryState, question: str) -> str:
-        if not state.summaries and not state.current_record:
+        if not state.summaries and not state.current_record and not state.constraints:
             return ""
-        # 历史摘要只留最近两条；当前轮工具结果不能被记忆压缩策略吞掉。
-        parts = ["已完成工作摘要:", *state.summaries[-2:]]
+        # 历史摘要只留最近两条；约束和当前轮工具结果不能被摘要压缩吞掉。
+        parts = ["约束:", *state.constraints, "已完成工作摘要:", *state.summaries[-2:]]
         if state.current_record:
             parts.extend(["当前工具证据:", state.current_record])
         return "\n".join(parts)
@@ -131,12 +131,14 @@ class GraphStatePolicy(MemoryPolicy):
             if not any(value in line for value in self._retired_values)
         ]
         try:
-            result = self.assembler.assemble(summaries, [], self.budget_tokens)
+            result = self.assembler.assemble(
+                summaries, [], self.budget_tokens, focus=question
+            )
         except PlanZoneOverflow:
             # 图大到计划区自身就超预算：退回"只有计划区"（与生产服务同一条降级路径），
             # 保证长任务不崩；降级本身要留痕，别静默。
             self.degraded_contexts += 1
-            return self.assembler.render_plan()
+            return self.assembler.render_plan(focus=question)
         return result.text
 
 

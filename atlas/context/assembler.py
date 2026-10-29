@@ -15,6 +15,7 @@
 缺失即抛 AuditError（决策清单 #3：活跃约束/决定缺席即报错）。
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Sequence, Tuple
 
@@ -67,8 +68,8 @@ class ContextAssembler:
     # ---------- 对外入口 ----------
 
     def assemble(self, summaries: Sequence[str], recent_raw: Sequence[str],
-                 budget_tokens: int) -> AssembleResult:
-        plan_text = self._render_plan()
+                 budget_tokens: int, focus: str = "") -> AssembleResult:
+        plan_text = self._render_plan(focus=focus)
         plan_tokens = self.count(plan_text)
         if plan_tokens + sum(self.floors.values()) > budget_tokens:
             raise PlanZoneOverflow(
@@ -124,11 +125,22 @@ class ContextAssembler:
 
     # ---------- 区渲染 ----------
 
-    def render_plan(self) -> str:
+    def render_plan(self, focus: str = "") -> str:
         """计划区单独渲染（组装失败降级时也要保证状态可见）。"""
-        return self._render_plan()
+        return self._render_plan(focus=focus)
 
-    def _render_plan(self) -> str:
+    @staticmethod
+    def _focus_terms(focus: str) -> set[str]:
+        """提取问题中的稳定实体；用于事实召回，不参与约束/决定过滤。"""
+        return {
+            term.lower()
+            for term in re.findall(r"[A-Za-z][A-Za-z0-9_]*|\d+(?:\.\d+)?|[一-龥]{2,}", focus or "")
+            if term not in {
+                "什么", "多少", "如何", "哪个", "取值", "得到", "给出", "参数", "的"
+            }
+        }
+
+    def _render_plan(self, focus: str = "") -> str:
         eng = self.engine
         audit = provenance.audit_nodes(eng.nodes.values())
         self._last_audit = audit
@@ -139,6 +151,13 @@ class ContextAssembler:
         if goal:
             lines.append(f"目标: [{goal.id}] {goal.content}")
         open_ids = eng.dependency_order([s.id for s in eng.open_subtasks()])
+        if focus and open_ids:
+            terms = self._focus_terms(focus)
+            focused = [
+                sid for sid in open_ids
+                if any(term in eng.nodes[sid].content.lower() for term in terms)
+            ]
+            open_ids = focused or open_ids[-3:]
         if open_ids:
             lines.append("子任务（依赖序）:")
             for sid in open_ids:
@@ -157,6 +176,14 @@ class ContextAssembler:
         ordered = sorted(eng.nodes.values(), key=lambda n: n.id)
         facts = [n for n in ordered
                  if n.type is NodeType.FACT and n.status is NodeStatus.ACTIVE and n.id not in stale]
+        if focus and facts:
+            terms = self._focus_terms(focus)
+            relevant = [
+                fact for fact in facts
+                if any(term in fact.content.lower() for term in terms)
+            ]
+            # 保证问题驱动的召回为空时仍有少量最近事实可用，避免语义表达差异导致全丢。
+            facts = relevant or facts[-3:]
         if facts:
             lines.append("环境事实:")
             lines += [f"  - [{f.id}] {f.content}{self._source_note(f)}" for f in facts]

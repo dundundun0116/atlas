@@ -75,7 +75,7 @@ export OPENCODE_COMPAT=1 OPENCODE_SESSION=atlas-eval-$(date +%s)
 - 成本列 = 累计 token × 假定单价（默认 0.002/千 token），是**估算**，不是账单；
 - `temperature=0` 时重复运行结果可能完全一致，重复的作用是排除基础设施抖动，不是降低模型方差。
 - 长程 fixture 的事实按子任务逐步提供，不预置未来事实；完成判定要求回答同时包含核心断言和当前问题主体，单独复述数字不算完成。
-注意 40 步时计划区自身可能超过组装预算，此时走的是**降级为计划区**的路径（与生产服务一致），必须留痕（`GraphStatePolicy.degraded_contexts`）。
+长任务的计划区按当前问题相关性召回事实；约束和决定始终保留。只有相关性召回无法满足预算时才进入 `PlanZoneOverflow` 降级路径，并通过 `GraphStatePolicy.degraded_contexts` 留痕。
 
 ## 6. 回放与排障
 
