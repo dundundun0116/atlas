@@ -4,7 +4,7 @@
   <img src="docs/architecture.png" alt="Atlas 运行时示意图" width="720">
 </p>
 
-![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Tests](https://img.shields.io/badge/tests-569%20passed-brightgreen)
+![CI](https://github.com/dundundun0116/atlas/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Tests](https://img.shields.io/badge/tests-573%20passed-brightgreen)
 
 **面向长程研究任务的可恢复多智能体运行时（Atlas）+ 自适应检索决策引擎（CompassRAG）。**
 
@@ -70,12 +70,17 @@ streamlit run atlas/demo_app.py               # 交互式观察结转过程（�
 # 6) 端到端任务级评测（离线脚手架，只验证机制）
 python scripts/run_merged_e2e.py
 
-# 7) 统一任务报告（HTML：状态 / 角色步骤 / 证据 / CompassRAG trace）
+# 7) 统一入口：Atlas 任务 API + 只读工作台页（/atlas）
+python scripts/serve_atlas_api.py --demo --port 8001   # 另开终端：建演示任务并起 API
+cd web && npm ci && npm run dev                        # 浏览器打开 http://localhost:5173/atlas
+
+# 8) 静态任务报告（HTML：状态 / 角色步骤 / 证据 / CompassRAG trace）
 python -m atlas.cli report <session_id> --db <SQLite 路径> \
     --research-base-url http://127.0.0.1:8000
 
-# 8) 全部测试
-pytest -q
+# 9) 全部测试
+pytest -q                      # 后端 573 项
+cd web && npm test             # 前端 14 项
 ```
 
 CompassRAG 的检索侧可以单独使用与评测（真实索引需要先按 [docs/compassrag/README.md](docs/compassrag/README.md) 构建语料/索引，并配置 `.env`）：
@@ -123,7 +128,7 @@ atlas/
 ├── scripts/               # Atlas 评测入口 + CompassRAG 语料/索引/评测/服务脚本
 ├── configs/               # CompassRAG 模型端点与消融开关
 ├── data/samples/          # 三基准分层抽样清单（seed=42，入仓可复现）
-├── web/                   # CompassRAG 研究工作台（Vite + React + TS）
+├── web/                   # 工作台：/ 研究（CompassRAG）+ /atlas 任务（Atlas，只读）
 ├── eval/                  # MemoryArena 评测脚手架（memory server / configs）
 ├── tests/                 # 两层的单元测试（569 项，无需真实 API；含 HTTP 重启用例）
 └── docs/                  # Atlas 文档 + compassrag/ 检索层文档 + 架构图
@@ -143,7 +148,7 @@ atlas/
 - [ ] 真实模型端到端评测（固定任务集、预算、重复次数）——效果数字的前提
 - [ ] 角色消融（Planner / Worker / Auditor 各自贡献拆分）
 - [x] 统一任务报告（静态 HTML：状态 / 角色 / 证据 / CompassRAG trace 下钻）
-- [ ] 交互式统一工作台：把 Atlas 任务状态并入 Vite 工作台（当前 Web 仍只覆盖检索层）
+- [x] 统一工作台：Vite `/atlas` 只读页（任务状态 / 角色步骤 / 图节点 / 报告）
 
 ## License
 
