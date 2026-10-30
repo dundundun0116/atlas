@@ -138,7 +138,9 @@ atlas/
 
 ## 合并说明
 
-本仓库由两个独立项目合并而来：Atlas（`dundundun0116/atlas`）与 CompassRAG（`dundundun0116/compassrag`，合并时基线 `cd20f02` + 未提交工作树）。合并方式是**单仓双层、边界不变**：两包并列、协议仍走 `ResearchTool`，不把检索实现复制进 Atlas，也不让 CompassRAG 变成 Atlas 的内部子包。原 CompassRAG 仓库保留为归档；内部台账/计划/面试材料不进入公开树（见 `.gitignore` 的 `docs/internal/`）。
+本仓库由两个独立项目合并而来：Atlas（`dundundun0116/atlas`）与 CompassRAG（`dundundun0116/compassrag`，合并时基线 `cd20f02` + 未提交工作树）。合并方式是**单仓双层、边界不变**：两包并列、协议仍走 `ResearchTool`，不把检索实现复制进 Atlas，也不让 CompassRAG 变成 Atlas 的内部子包。
+
+对外只有一个项目：原 `compassrag` 仓库已 **GitHub 归档（只读）**，完整 Git 历史并入本仓的 `compassrag-history` 分支（tag `compassrag-archive-20261030`）；内部台账/计划/面试材料不进入公开树（见 `.gitignore` 的 `docs/internal/`）。
 
 系统设计、端到端流程、契约与集成验收见 [docs/ATLAS_COMPASSRAG_SYSTEM_DESIGN.md](docs/ATLAS_COMPASSRAG_SYSTEM_DESIGN.md)。
 
