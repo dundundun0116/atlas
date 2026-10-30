@@ -168,6 +168,9 @@ class RepositoryGraph:
         self.session_id = session_id
         self.service = ServiceRuntime(repository, session_id)
 
+    def known_ids(self):
+        return {node.node_id for node in self.repository.nodes(self.session_id)}
+
     def state_view(self, role: str) -> str:
         nodes = [n for n in self.repository.nodes(self.session_id) if n.status == "active"]
         lines = [f"[{role}] 活跃节点 {len(nodes)} 个"]

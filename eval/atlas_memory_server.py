@@ -132,6 +132,10 @@ class StateViewRequest(BaseModel):
     role: str = "worker"
 
 
+class KnownIdsRequest(BaseModel):
+    user_id: str
+
+
 class RoleNoteRequest(BaseModel):
     user_id: str
     role: str
@@ -256,6 +260,12 @@ def _current_atlas(user_id: str) -> AtlasMemorySystem:
 def state_view(req: StateViewRequest):
     """编排角色读共享图：返回计划区 + 踩坑提示。"""
     return {"view": _current_atlas(req.user_id).state_view(req.role)}
+
+
+@app.post("/memory/known_ids")
+def known_ids(req: KnownIdsRequest):
+    """真实节点 id 集合：编排器据此强制 Auditor 引用校验（D10 债务收口）。"""
+    return {"ids": sorted(_current_atlas(req.user_id).known_ids())}
 
 
 @app.post("/memory/role_note")

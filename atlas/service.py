@@ -139,6 +139,10 @@ class AtlasMemorySystem:
 
     # ---------- 多智能体编排的图接口 ----------
 
+    def known_ids(self) -> set[str]:
+        """图里真实存在的节点 id：Auditor 引用校验用（拿得到就强制，不拿不到才宽松）。"""
+        return set(self.engine.nodes)
+
     def state_view(self, role: str) -> str:
         """给角色的图状态视图（计划区 + 踩坑提示）：角色据此协调，而非读对话历史。"""
         view = self.assembler.render_plan()
@@ -314,6 +318,10 @@ class ServiceRuntime:
             retry_count=retry_count,
             context_digest_version=digest,
         )
+
+    def known_ids(self) -> set[str]:
+        """本会话在 repository 里的真实节点 id，供编排器做严格引用校验。"""
+        return {node.node_id for node in self.repository.nodes(self.session_id)}
 
     def state_view(self) -> dict:
         """状态视图：状态机 + 图 + 最近 checkpoint（API 与 trace 共用）。"""

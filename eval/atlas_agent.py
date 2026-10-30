@@ -40,6 +40,14 @@ class MemoryServerGraphClient:
         resp.raise_for_status()
         return resp.json()["view"]
 
+    def known_ids(self) -> set:
+        resp = requests.post(
+            f"{self.base_url}/memory/known_ids",
+            json={"user_id": self.user_id}, timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return set(resp.json().get("ids") or [])
+
     def role_note(self, role: str, kind: str, content: str, reason: str = "",
                   evidence: str = "") -> dict:
         resp = requests.post(
