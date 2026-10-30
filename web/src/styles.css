@@ -60,3 +60,10 @@ blockquote { margin: 4px 0 12px; padding-left: 10px; border-left: 2px solid var(
 .panel-head { display: flex; justify-content: space-between; align-items: center; }
 .question { display: block; }
 .error { background: #3a1d1d; border: 1px solid var(--bad); color: #ffc9c7; padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; }
+
+/* 统一工作台 /atlas：只读任务视图 */
+.atlas-nodes { width: 100%; border-collapse: collapse; font-size: 13px; }
+.atlas-nodes th, .atlas-nodes td {
+  text-align: left; padding: 6px 8px; border-bottom: 1px solid #8883; vertical-align: top;
+}
+.atlas-report { white-space: pre-wrap; font-size: 13px; margin: 0; }
