@@ -303,6 +303,8 @@ class Orchestrator:
                 result = self.research_tool.research(request)
             except ResearchToolError as exc:
                 trace.research_error = describe_failure(exc)
+                # 失败也尽量保留上游 trace（CompassRAG 侧可能已经跑了一半）
+                trace.research_trace_id = exc.trace_id or trace.research_trace_id
                 return ""
             self._research_cache[request.idempotency_key] = result
         else:
@@ -315,6 +317,9 @@ class Orchestrator:
                     "kind": "invalid_request", "message": str(exc), "trace_id": request.trace_id
                 }
                 return ""
+        # 记录上游（CompassRAG）自己的 trace id：Atlas 的 task trace 据此下钻，
+        # 而不是只留下 Atlas 侧编的关联 id。
+        trace.research_trace_id = result.trace_id or trace.research_trace_id
         trace.research_rounds = result.retrieval_rounds
         trace.research_stop_reason = result.stop_reason
         trace.research_confidence = result.confidence

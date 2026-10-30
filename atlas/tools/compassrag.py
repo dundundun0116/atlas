@@ -15,6 +15,7 @@ import urllib.request
 from typing import Any, Callable, Dict, Optional
 
 from atlas.tools.protocol import (
+    EvidenceItem,
     ResearchRequest,
     ResearchResult,
     ResearchToolError,
@@ -125,6 +126,96 @@ def _kind_for_status(code: int) -> str:
     if code == 404:
         return "no_evidence"
     return "upstream_error"
+
+
+#: CompassRAG 对外失败词表 → Atlas 五类错误。
+_COMPASS_FAILURE_TO_ATLAS = {
+    "timeout": "timeout",
+    "budget_exhausted": "budget_exhausted",
+    "no_evidence": "no_evidence",
+    "upstream_error": "upstream_error",
+    "invalid_request": "invalid_request",
+    # 取消不是 Atlas 的错误分类：按上游中断处理，由任务层决定暂停/重试。
+    "cancelled": "upstream_error",
+}
+
+
+class CompassRAGAgentTool:
+    """真实进程内桥接：Atlas 直接驱动同仓的 CompassRAG Agent。
+
+    与 `HttpCompassRAGTool` 暴露同一个 `ResearchTool` 协议，但省掉 HTTP 与序列化：
+
+    - 构造时才 import `compassrag`（Atlas 主包不硬依赖检索侧依赖）；
+    - 请求/响应在两个 `ResearchRequest` / `ResearchResult` 之间做确定性映射；
+    - CompassRAG 的结构化 `failure` 转成 `ResearchToolError` 五类，上层只按 kind 决策；
+    - 证据补齐 `retriever` / `rank`，trace_id 原样透传供上层关联。
+
+    幂等与取消语义由 CompassRAG 侧保证（`LocalResearchTool` 的 cache + `cancel_check`）。
+    """
+
+    def __init__(self, agent: Any, *, trace_dir: Optional[str] = None,
+                 cache: Optional[Dict[str, Any]] = None, use_graph: bool = True):
+        try:
+            from compassrag.adapters.atlas import LocalResearchTool as _CompassLocal
+        except ImportError as exc:  # pragma: no cover - 缺少可选依赖时给出可读错误
+            raise ResearchToolError(
+                "upstream_error", f"CompassRAG 不可用：{type(exc).__name__}: {exc}"
+            ) from exc
+        self.agent = agent
+        self._inner = _CompassLocal(agent, trace_dir=trace_dir, cache=cache, use_graph=use_graph)
+        self.calls = 0
+
+    def research(self, request: ResearchRequest) -> ResearchResult:
+        from compassrag.agent.schemas import ResearchRequest as CompassRequest
+
+        self.calls += 1
+        try:
+            compass_request = CompassRequest(
+                session_id=request.session_id,
+                subtask_id=request.subtask_id,
+                query=request.query,
+                budget_tokens=request.budget_tokens,
+                max_rounds=request.max_rounds,
+                idempotency_key=request.idempotency_key,
+            )
+            compass_result = self._inner.research(compass_request)
+        except ResearchToolError:
+            raise
+        except (TimeoutError, socket.timeout) as exc:
+            raise ResearchToolError("timeout", str(exc), trace_id=request.trace_id) from exc
+        except Exception as exc:  # 检索侧内部异常一律按上游故障分类
+            raise ResearchToolError(
+                "upstream_error", f"{type(exc).__name__}: {exc}", trace_id=request.trace_id
+            ) from exc
+
+        trace_id = compass_result.trace_id or request.trace_id
+        if compass_result.failure:
+            kind = _COMPASS_FAILURE_TO_ATLAS.get(compass_result.failure, "upstream_error")
+            raise ResearchToolError(
+                kind, f"CompassRAG {compass_result.failure}", trace_id=trace_id
+            )
+        return ResearchResult(
+            answer=compass_result.answer,
+            evidence=[
+                EvidenceItem(
+                    source=item.source or item.chunk_id or "unknown",
+                    chunk_id=item.chunk_id,
+                    quote=item.quote,
+                    score=float(item.score or 0.0),
+                    retriever=item.retriever,
+                    rank=int(item.rank or 0),
+                )
+                for item in compass_result.evidence
+            ],
+            confidence=float(compass_result.confidence or 0.0),
+            retrieval_rounds=int(compass_result.retrieval_rounds or 0),
+            stop_reason=compass_result.stop_reason,
+            trace_id=trace_id,
+        )
+
+    def get_trace(self, trace_id: str) -> Optional[Dict[str, Any]]:
+        """回读 CompassRAG 的单次研究轨迹（不重新调用模型）。"""
+        return self._inner.get_trace(trace_id)
 
 
 def describe_failure(exc: ResearchToolError) -> Dict[str, Any]:

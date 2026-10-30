@@ -42,12 +42,18 @@ class ResearchToolError(RuntimeError):
 
 @dataclass(frozen=True)
 class EvidenceItem:
-    """一条证据：来源 + 定位 + 引文 + 分数。"""
+    """一条证据：来源 + 定位 + 引文 + 分数 + 检索器/排序。
+
+    `retriever` / `rank` 是 CompassRAG 侧回传的可选追溯信息（哪一路检索器、排第几），
+    默认空值；只给 source/chunk_id/quote/score 的旧响应照常解析（向后兼容）。
+    """
 
     source: str
     chunk_id: str = ""
     quote: str = ""
     score: float = 0.0
+    retriever: str = ""
+    rank: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -55,6 +61,8 @@ class EvidenceItem:
             "chunk_id": self.chunk_id,
             "quote": self.quote,
             "score": float(self.score or 0.0),
+            "retriever": self.retriever,
+            "rank": int(self.rank or 0),
         }
 
     @classmethod
@@ -69,6 +77,8 @@ class EvidenceItem:
             chunk_id=str(payload.get("chunk_id") or ""),
             quote=str(payload.get("quote") or ""),
             score=float(payload.get("score") or 0.0),
+            retriever=str(payload.get("retriever") or ""),
+            rank=int(payload.get("rank") or 0),
         )
 
 

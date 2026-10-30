@@ -1,6 +1,7 @@
 """研究工具层（阶段 A）：协议、CompassRAG 适配器。"""
 
 from atlas.tools.compassrag import (
+    CompassRAGAgentTool,
     CompassRAGLocalTool,
     HttpCompassRAGTool,
     LocalResearchTool,
@@ -19,6 +20,7 @@ from atlas.tools.protocol import (
 
 __all__ = [
     "ERROR_KINDS",
+    "CompassRAGAgentTool",
     "CompassRAGLocalTool",
     "EvidenceItem",
     "HttpCompassRAGTool",
