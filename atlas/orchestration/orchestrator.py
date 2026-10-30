@@ -344,6 +344,13 @@ class Orchestrator:
             evidence=result.evidence_json(),
             source=",".join(item.source for item in result.evidence[:3]),
             confidence=result.confidence,
+            # 统一报告据此从 Fact 下钻到 CompassRAG 的单次检索轨迹
+            meta={
+                "research_trace_id": result.trace_id,
+                "research_stop_reason": result.stop_reason,
+                "research_rounds": result.retrieval_rounds,
+                "research_confidence": result.confidence,
+            },
         )
         self._research_written.add(request.idempotency_key)
         node_id = (note or {}).get("node_id", "") if isinstance(note, dict) else ""
@@ -372,7 +379,7 @@ class Orchestrator:
             return None
 
     def _role_note_with_provenance(self, role, kind, content, *, reason, evidence,
-                                   source="", confidence=0.0):
+                                   source="", confidence=0.0, meta=None):
         """图客户端支持 provenance 字段就带上；老实现（只认 reason/evidence）照旧可用。"""
         fn = self.graph.role_note
         try:
@@ -384,6 +391,8 @@ class Orchestrator:
             extra["source"] = source
         if "confidence" in params:
             extra["confidence"] = float(confidence or 0.0)
+        if meta and "meta" in params:
+            extra["meta"] = meta
         return fn(role, kind, content, reason=reason, evidence=evidence, **extra)
 
     @staticmethod

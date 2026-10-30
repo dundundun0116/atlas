@@ -26,6 +26,8 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from atlas.orchestration import Orchestrator  # noqa: E402
+from atlas.report import write_task_report  # noqa: E402
+from atlas.runtime import AgentRuntime  # noqa: E402
 from atlas.service import ServiceRuntime  # noqa: E402
 from atlas.storage.repository import GraphRepository, open_database  # noqa: E402
 from atlas.tools import CompassRAGAgentTool, ResearchRequest, ResearchToolError  # noqa: E402
@@ -116,8 +118,8 @@ class RepositoryGraph:
             lines.append(f"- {node.type}: {str(node.content)[:80]}")
         return "\n".join(lines)
 
-    def role_note(self, role, kind, content, reason="", evidence=""):
-        row = self.service.note(role, content, kind=kind, reason=reason, evidence=evidence)
+    def role_note(self, role, kind, content, reason="", evidence="", meta=None):
+        row = self.service.note(role, content, kind=kind, reason=reason, evidence=evidence, meta=meta)
         return {"node_id": row.node_id, "kind": kind, "actor": role}
 
 
@@ -142,7 +144,7 @@ class AtlasLLM:
 # --------------------------------------------------------------------------- #
 
 
-def run(db_path: str) -> dict:
+def run(db_path: str, report_path: str = "") -> dict:
     tool = build_research_tool()
     database = open_database(db_path)
     repository = GraphRepository(database)
@@ -163,6 +165,20 @@ def run(db_path: str) -> dict:
         research_query="爱因斯坦出生于哪一年？")
 
     facts = [n for n in repository.nodes(session) if n.type == "fact" and n.actor == "research"]
+
+    # 统一入口：一页 HTML 看状态 / 角色步骤 / 证据 / CompassRAG trace
+    written = ""
+    if report_path:
+        runtime = AgentRuntime(repository)
+        written = write_task_report(
+            report_path,
+            state=runtime.get_state(session),
+            trace=runtime.get_trace(session),
+            replay=runtime.replay(session),
+            nodes=repository.nodes(session),
+            research_base_url="http://127.0.0.1:8000",
+            title="Atlas Research Agent · 合并演示",
+        )
     database.close()
     return {
         "research": research,
@@ -170,6 +186,7 @@ def run(db_path: str) -> dict:
         "answer": answer,
         "atlas_trace": orchestration_trace,
         "facts": facts,
+        "report_path": written,
     }
 
 
@@ -186,7 +203,8 @@ def failure_path() -> str:
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        out = run(os.path.join(tmp, "merged.db"))
+        out = run(os.path.join(tmp, "merged.db"),
+                  report_path=os.path.join(ROOT, "runs", "merged_demo", "task_report.html"))
 
     research = out["research"]
     trace = out["compass_trace"]
@@ -218,6 +236,9 @@ def main() -> None:
 
     print("\n== D. 失败路径（无证据）==")
     print(f"  {failure_path()} —— 未写 Fact，任务状态不受影响")
+
+    if out["report_path"]:
+        print(f"\n统一任务报告：{out['report_path']}")
 
 
 if __name__ == "__main__":
