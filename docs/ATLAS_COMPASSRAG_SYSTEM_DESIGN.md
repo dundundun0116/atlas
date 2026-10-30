@@ -1,6 +1,9 @@
 # Atlas + CompassRAG 系统总流程与设计（草案）
 
-> 状态：方案草案。本文用于统一两个现有项目的职责和集成验收，不代表新的架构决策已经定稿。Atlas 与 CompassRAG 继续各自维护；简历上可作为一个完整的长程研究 Agent 项目展示。
+> 状态：**已按本方案合并落地（2026-10-30）**。Atlas 与 CompassRAG 现在在同一个仓库里，但仍是两个包、两条测试基线、一个 `ResearchTool` 边界；本文第 1–8 节的设计约束保持不变，第 9 节的阶段验收与第 11 节的"暂不纳入"已按实际结果更新（见 §9.5、§12）。
+>
+> 合并决策：用户拍板「单仓双层 + 真实桥接」。未采用的替代方案：深度合并为单一 `atlas` 包（导入全量重写、回归风险高，且违反本文对检索/运行时职责的划分），以及保留双仓只做集成层（不满足"一个项目"的交付形态）。
+
 
 ## 1. 项目目标
 
@@ -171,6 +174,17 @@ Atlas API 和 CompassRAG Research API 分别启动。Atlas 使用 HTTP adapter �
 
 ## 9. 集成实施路线与验收
 
+> **落地状态（2026-10-30）**
+
+| 阶段 | 状态 | 证据 |
+|---|---|---|
+| 阶段 0 核对现状与冻结边界 | ✅ | 记录双方 schema/路由/运行方式；CompassRAG 未提交工作树先冻结（基线 `cd20f02` + dirty `8eb7c5a`）；`atlas/tools/protocol.py` 与 `compassrag/agent/schemas.py` 字段对照一致 |
+| 阶段 1 契约与本地端到端 | ✅ | `tests/test_compassrag_bridge.py`（8 项：成功映射 / 证据 retriever+rank / trace 回读 / 幂等 / 五类失败 / 编排写 Fact）；`examples/atlas_compassrag_demo.py` 离线跑通全链路 |
+| 阶段 2 HTTP 服务化与运行恢复 | ◐ | HTTP adapter 与 HTTP 契约测试此前已存在（`tests/test_research_tool.py`、`tests/test_research_api.py`）；合并后同一套 `ResearchTool` 契约测试同时覆盖本地与 HTTP；真实服务重启恢复仍需联调（需真实索引与模型预算） |
+| 阶段 3 统一演示与文档 | ✅ | 根 `README.md`、本文件、`docs/compassrag/`；一条命令 `examples/atlas_compassrag_demo.py` 展示证据引用与失败路径；Web 工作台仍只覆盖 CompassRAG 侧 |
+| 阶段 4 系统级评测 | ◐ | 两层各自指标保留原口径（Atlas：`docs/evaluation.md`；CompassRAG：`docs/compassrag/evaluation.md`）；端到端任务级评测集未建，不宣称合并收益 |
+
+
 ### 阶段 0：核对现状与冻结边界
 
 - [ ] 以当前 Atlas / CompassRAG 工作树为输入，记录双方 schema、错误映射、HTTP 路由和运行方式。
@@ -222,8 +236,52 @@ Atlas API 和 CompassRAG Research API 分别启动。Atlas 使用 HTTP adapter �
 
 ## 11. 暂不纳入本方案的内容
 
-- 将两个仓库合并成一个代码仓库。
+> **2026-10-30 更新**：第一条已被用户决策取代——两个仓库已合并为单仓。注意合并形态是
+> "单仓双层、边界不变"，不是"把 CompassRAG 变成 `atlas` 的内部子包"，所以第二、五条仍然有效。
+
+- ~~将两个仓库合并成一个代码仓库。~~（已合并；见 §12）
 - 把 CompassRAG 的检索实现复制进 Atlas。
 - 引入新框架、数据库或消息队列，仅为扩充技术栈。
 - 宣称通用长程 Agent 效果，或把离线脚手架和小样本结果写成简历提升数据。
 - 将 Atlas 定位改成通用 Agent 平台，或将 CompassRAG 改成 Atlas 的内部子包。
+
+## 12. 合并落地：单仓双层
+
+### 12.1 目录与打包
+
+```text
+atlas/            # 运行时包（原 Atlas 仓）
+compassrag/       # 检索包（原 CompassRAG 仓）
+tests/            # 两套测试合成一套（561 passed + 6 skipped）
+configs/ data/ web/ scripts/   # CompassRAG 侧资产按原相对路径迁入根目录
+docs/compassrag/  # 检索层文档（原 docs/ 中与 Atlas 重名的文件改由子目录消歧）
+pyproject.toml    # 一个项目、两个包（setuptools package-dir 发现 atlas* 与 compassrag*）
+```
+
+- **一个环境**：`pip install -e ".[dev,api]"` 同时装两个包；依赖取并集（Atlas 的 SQLAlchemy/LangGraph/FastAPI + CompassRAG 的 openai/bm25s/pyarrow/scikit-learn 等），稠密检索与演示页仍是可选 extra。
+- **一套测试**：`pytest -q` 一次跑两层；CompassRAG 依赖 `configs/` 与 `docs/compassrag/README.md` 的校验测试已按新路径调整。
+- **边界未变**：`atlas/` 不 import `compassrag/` 的内部模块，唯一入口是 `atlas/tools/compassrag.py`；`compassrag/` 不 import `atlas/`。
+
+### 12.2 新增的真实桥接
+
+`CompassRAGAgentTool`（`atlas/tools/compassrag.py`）：
+
+- 构造时才 import `compassrag`，Atlas 主包不硬依赖检索侧依赖；
+- `ResearchRequest` → CompassRAG `ResearchRequest`（预算 / 轮数 / 幂等键 / session / subtask）；
+- CompassRAG `ResearchResult` → Atlas `ResearchResult`，证据补 `retriever` / `rank`；
+- CompassRAG 的六类 `failure` → Atlas 五类错误（`cancelled` 归 `upstream_error`，因为 Atlas 的错误词表固定为五类）；
+- `get_trace(trace_id)` 直接回读 CompassRAG 轨迹，不重新调模型；
+- Orchestrator 成功/失败路径都把 CompassRAG 的 `trace_id` 写进 `OrchestrationTrace.research_trace_id`。
+
+### 12.3 验收命令
+
+```bash
+pytest -q                                    # 561 passed, 6 skipped
+python examples/atlas_compassrag_demo.py     # 规划→取证→证据入图→核验→失败路径
+```
+
+### 12.4 仍未做 / 诚实边界
+
+- 端到端任务级评测集未建；两层数字仍各自报告，没有"合并后提升"的结论。
+- HTTP 模式下"服务重启 + 未完成请求续跑"只做了契约与单测级覆盖，没有真实进程级演练。
+- Web 工作台只展示 CompassRAG 侧；Atlas 任务状态尚无统一页面。
