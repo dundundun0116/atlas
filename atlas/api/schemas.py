@@ -74,6 +74,26 @@ class ResearchCallRequest(RequestMeta):
     max_rounds: int = Field(default=2, ge=1)
 
 
+class OrchestrateRequest(RequestMeta):
+    """触发一次完整编排（Planner → Research → Worker → Auditor → 修订）。"""
+
+    problem: str = ""          # 空则用任务目标
+    research_query: str = ""   # 空则用 problem
+    subtask_id: str = "S1"
+
+
+class OrchestrateView(BaseModel):
+    session_id: str
+    state: str
+    answer: str = ""
+    route: str = ""
+    draft: str = ""
+    calls: List[str] = Field(default_factory=list)
+    fact_ids: List[str] = Field(default_factory=list)
+    research_trace_id: str = ""
+    research_error: Optional[Dict[str, Any]] = None
+
+
 class ResearchCallView(BaseModel):
     session_id: str
     fact_id: str = ""

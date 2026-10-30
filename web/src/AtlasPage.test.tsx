@@ -5,9 +5,9 @@ import AtlasPage from "./AtlasPage";
 const TASK = {
   session_id: "demo",
   goal: "回答：爱因斯坦出生于哪一年？",
-  state: "executing",
+  state: "planning",
   failure_reason: "",
-  allowed_triggers: ["work_done", "pause"],
+  allowed_triggers: ["plan_ready", "pause"],
   nodes: [
     {
       id: "D1", type: "decision", status: "active", content: "先检索再作答",
@@ -31,7 +31,7 @@ const TASK = {
   provenance: {},
 };
 
-const REPORT = { session_id: "demo", state: "executing", report: "# 任务报告\n状态: executing" };
+const REPORT = { session_id: "demo", state: "planning", report: "# 任务报告\n状态: planning" };
 
 function respond(body: unknown) {
   return {
@@ -47,6 +47,13 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (init?.method === "POST") {
+      if (String(url).includes("/orchestrate")) {
+        return respond({
+          session_id: "demo", state: "completed", answer: "编排答案",
+          route: "先检索", draft: "草稿", calls: ["planner", "worker", "auditor"],
+          fact_ids: ["F1"], research_trace_id: "compass-trace-1", research_error: null,
+        });
+      }
       if (String(url).includes("/research")) {
         return respond({
           session_id: "demo", fact_id: "F2", answer: "1879 年出生（API）",
@@ -72,11 +79,11 @@ describe("AtlasPage", () => {
   it("默认加载 demo 任务并显示状态、证据与报告", async () => {
     render(<AtlasPage />);
     expect(await screen.findByText(/爱因斯坦出生于哪一年/)).toBeInTheDocument();
-    expect(screen.getByText("executing")).toBeInTheDocument();
+    expect(screen.getByText("planning")).toBeInTheDocument();
     expect(screen.getByText("1879 年")).toBeInTheDocument();
     expect(screen.getByText(/bm25/)).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "任务报告" })).toBeInTheDocument();
-    expect(screen.getByText(/状态: executing/)).toBeInTheDocument();
+    expect(screen.getByText(/状态: planning/)).toBeInTheDocument();
   });
 
   it("输入会话 ID 后重新拉取对应任务", async () => {
@@ -93,7 +100,7 @@ describe("AtlasPage", () => {
   it("点击推进按钮调用 advance 并刷新", async () => {
     render(<AtlasPage />);
     await screen.findByText(/爱因斯坦出生于哪一年/);
-    fireEvent.click(screen.getByRole("button", { name: "执行完成" }));
+    fireEvent.click(screen.getByRole("button", { name: "规划完成" }));
     await waitFor(() => {
       const advances = fetchMock.mock.calls.filter(
         ([url, init]) => init?.method === "POST" && String(url).includes("/advance"),
@@ -101,8 +108,18 @@ describe("AtlasPage", () => {
       expect(advances.length).toBe(1);
       expect(String(advances[0][0])).toContain("/atlas-api/tasks/demo/advance");
       const body = JSON.parse(String((advances[0][1] as RequestInit).body));
-      expect(body.trigger).toBe("work_done");
+      expect(body.trigger).toBe("plan_ready");
     });
+  });
+
+  it("点击运行完整编排显示答案与调用链", async () => {
+    render(<AtlasPage />);
+    await screen.findByText(/爱因斯坦出生于哪一年/);
+    fireEvent.click(screen.getByRole("button", { name: /运行完整编排/ }));
+    expect(await screen.findByText("编排答案")).toBeInTheDocument();
+    expect(screen.getByText(/planner → worker → auditor/)).toBeInTheDocument();
+    const calls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(calls.some((url) => url.includes("/atlas-api/tasks/demo/orchestrate"))).toBe(true);
   });
 
   it("点击发起检索显示答案/证据并刷新任务", async () => {

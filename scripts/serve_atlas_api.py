@@ -21,6 +21,32 @@ from atlas.runtime import AgentRuntime  # noqa: E402
 from atlas.storage.repository import GraphRepository, open_database  # noqa: E402
 
 
+def build_llm():
+    """按 .env / 环境变量装配一个 OpenAI 兼容的编排模型；没配就返回 None。"""
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(ROOT / ".env")
+    except Exception:  # pragma: no cover - .env 可选
+        pass
+    api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key, base_url=os.getenv("LLM_BASE_URL") or None)
+    model = os.getenv("LLM_MODEL", "gpt-4o-mini")
+
+    def llm(prompt: str) -> str:
+        response = client.chat.completions.create(
+            model=model, temperature=0,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content or ""
+
+    return llm
+
+
 def seed_demo(repository: GraphRepository, session: str = "demo") -> None:
     """建一个可看的演示任务：创建 → 规划推进 → 写一条决策与一条研究事实。"""
     if repository.get_session(session) is not None:
@@ -65,6 +91,12 @@ def main() -> None:
     repository = GraphRepository(database)
     if args.demo:
         seed_demo(repository)
+    orchestrate_llm = build_llm()
+    if orchestrate_llm is None:
+        print("[atlas-api] 未配置 LLM_API_KEY：/orchestrate 返回 unrecoverable（可看/可检索，不可编排）")
+    else:
+        print(f"[atlas-api] 编排模型已启用：{os.getenv('LLM_MODEL', 'gpt-4o-mini')}")
+
     research_tool = None
     if args.compassrag_url:
         from atlas.tools import HttpCompassRAGTool
@@ -73,7 +105,8 @@ def main() -> None:
         print(f"[atlas-api] ResearchTool 已启用：{args.compassrag_url}")
     else:
         print("[atlas-api] 未配置 --compassrag-url：/research 端点返回 unrecoverable（工作台可看不可发起检索）")
-    app = create_app(repository, research_tool=research_tool)
+    app = create_app(repository, research_tool=research_tool,
+                     orchestrate_llm=orchestrate_llm)
     uvicorn.run(app, host=args.host, port=args.port)
 
 

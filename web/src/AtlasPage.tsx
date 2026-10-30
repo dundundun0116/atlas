@@ -6,11 +6,13 @@ import {
   getAtlasTask,
   pauseAtlasTask,
   resumeAtlasTask,
+  runAtlasOrchestration,
   runAtlasResearch,
   type AtlasEvidence,
   type AtlasNode,
   type AtlasReport,
   type AtlasTask,
+  type OrchestrateResult,
   type ResearchCallResult,
 } from "./api/atlas";
 
@@ -67,6 +69,8 @@ export default function AtlasPage() {
   const [researchQuery, setResearchQuery] = useState("爱因斯坦出生于哪一年？");
   const [research, setResearch] = useState<ResearchCallResult | null>(null);
   const [researching, setResearching] = useState(false);
+  const [orchestration, setOrchestration] = useState<OrchestrateResult | null>(null);
+  const [orchestrating, setOrchestrating] = useState(false);
   const [task, setTask] = useState<AtlasTask | null>(null);
   const [report, setReport] = useState<AtlasReport | null>(null);
   const [loading, setLoading] = useState(false);
@@ -124,6 +128,20 @@ export default function AtlasPage() {
     }
   }, [load, researchQuery, sessionId]);
 
+  const doOrchestrate = useCallback(async () => {
+    setOrchestrating(true);
+    setError(null);
+    try {
+      const result = await runAtlasOrchestration(sessionId);
+      setOrchestration(result);
+      await load(sessionId);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setOrchestrating(false);
+    }
+  }, [load, sessionId]);
+
   const create = useCallback(async () => {
     const target = sessionId.trim();
     if (!target || !goal.trim()) return;
@@ -153,9 +171,9 @@ export default function AtlasPage() {
       <header>
         <h1>Atlas · 任务工作台</h1>
         <p className="muted">
-          可创建与查看任务：状态、角色步骤、图节点与证据来自 Atlas API（
-          <code>scripts/serve_atlas_api.py</code>）。研究问题的检索与证据仍走{" "}
-          <a href="/">CompassRAG 工作台</a>。
+          任务控制台：创建 / 推进 / 暂停 / 恢复 / 发起检索 / 运行完整编排，状态、
+          角色步骤、图节点与证据来自 Atlas API（<code>scripts/serve_atlas_api.py</code>）。
+          单题研究页仍在 <a href="/">CompassRAG 工作台</a>。
         </p>
       </header>
 
@@ -238,6 +256,26 @@ export default function AtlasPage() {
                 {researching ? "检索中…" : "发起检索"}
               </button>
             </div>
+            {task.state === "planning" && (
+              <div className="controls atlas-orchestrate">
+                <button onClick={doOrchestrate} disabled={orchestrating || loading}>
+                  {orchestrating ? "编排中…" : "运行完整编排（Planner → Worker → Auditor）"}
+                </button>
+                <span className="small muted">需要服务端配置 LLM_API_KEY；会推进任务到终态</span>
+              </div>
+            )}
+            {orchestration && (
+              <div className="atlas-research-result">
+                <p className="question">{orchestration.answer}</p>
+                <p className="small">
+                  route {orchestration.route} · 调用{" "}
+                  {orchestration.calls.join(" → ") || "—"} · 状态 {orchestration.state}
+                  {orchestration.research_trace_id
+                    ? ` · trace ${orchestration.research_trace_id}`
+                    : ""}
+                </p>
+              </div>
+            )}
             {research && (
               <div className="atlas-research-result">
                 {research.failure_kind ? (

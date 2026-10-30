@@ -89,6 +89,27 @@ export async function runAtlasResearch(
   return json<ResearchCallResult>(res);
 }
 
+export interface OrchestrateResult {
+  session_id: string;
+  state: string;
+  answer: string;
+  route: string;
+  draft: string;
+  calls: string[];
+  fact_ids: string[];
+  research_trace_id: string;
+  research_error: Record<string, unknown> | null;
+}
+
+export async function runAtlasOrchestration(sessionId: string): Promise<OrchestrateResult> {
+  const res = await fetch(`${BASE}/tasks/${encodeURIComponent(sessionId)}/orchestrate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ request_id: `req-${Date.now()}` }),
+  });
+  return json<OrchestrateResult>(res);
+}
+
 export interface CreateTaskPayload {
   session_id: string;
   goal: string;

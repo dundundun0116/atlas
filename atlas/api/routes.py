@@ -11,6 +11,8 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from atlas.api import schemas
+from atlas.api.graph import RepositoryGraph
+from atlas.orchestration import Orchestrator
 from atlas.runtime import (
     AgentRuntime,
     ModelTimeout,
@@ -25,7 +27,8 @@ from atlas.tools import ResearchRequest, ResearchToolError
 
 def create_app(repository: GraphRepository,
                tracer_factory: Optional[Callable[[str], Any]] = None,
-               research_tool: Any = None) -> FastAPI:
+               research_tool: Any = None,
+               orchestrate_llm: Optional[Callable[[str], str]] = None) -> FastAPI:
     app = FastAPI(title="Atlas Task Runtime API", version="0.2.0")
     runtime = AgentRuntime(repository, tracer_factory=tracer_factory)
 
@@ -137,6 +140,71 @@ def create_app(repository: GraphRepository,
             evidence=[item.to_dict() for item in result.evidence],
             confidence=result.confidence, stop_reason=result.stop_reason,
             trace_id=result.trace_id or request.trace_id,
+        )
+
+    # ---------- 完整编排（可选：部署时注入模型） ----------
+
+    @app.post("/tasks/{session_id}/orchestrate", response_model=schemas.OrchestrateView)
+    def orchestrate_task(session_id: str, payload: schemas.OrchestrateRequest):
+        if orchestrate_llm is None:
+            raise Unrecoverable(
+                "本部署未配置编排模型（启动参数或 LLM_API_KEY/LLM_MODEL）",
+                request_id=payload.request_id,
+            )
+        view = runtime.get_state(session_id)  # 不存在 → 404
+        current = view["state"]
+        if current in ("completed", "failed"):
+            raise StateConflict(f"任务已到终态 {current}，不能再编排", request_id=payload.request_id)
+        if current != "planning":
+            raise StateConflict(
+                f"编排只能从 planning 开始（当前 {current}）", request_id=payload.request_id
+            )
+        problem = (payload.problem or view.get("goal") or "").strip()
+        if not problem:
+            raise Unrecoverable("任务没有可用的问题文本", request_id=payload.request_id)
+        graph = RepositoryGraph(repository, session_id)
+        orchestrator = Orchestrator(orchestrate_llm, graph, research_tool=research_tool)
+        try:
+            answer, trace = orchestrator.solve(
+                problem, session_id=session_id, subtask_id=payload.subtask_id,
+                research_query=payload.research_query or problem,
+            )
+        except Exception as exc:
+            reason = f"编排失败：{type(exc).__name__}: {exc}"
+            repository.record_trace(session_id, {
+                "trace_id": f"orch-{payload.request_id or time.time_ns()}",
+                "agent_role": "orchestrator", "tool_name": "",
+                "outcome": "error", "stop_reason": "orchestration_error",
+            })
+            try:
+                runtime.advance_task(session_id, "fail", reason=reason[:200],
+                                     request_id=payload.request_id,
+                                     idempotency_key=f"orch-fail-{payload.request_id or 'auto'}")
+            except RuntimeFailure:
+                pass
+            raise Unrecoverable(reason, request_id=payload.request_id) from exc
+
+        # 把编排结果同步进任务生命周期（状态机只走合法转移）
+        for trigger, expected in (("plan_ready", "planning"), ("work_done", "executing"),
+                                  ("audit_pass", "auditing")):
+            if runtime.get_state(session_id)["state"] != expected:
+                continue
+            try:
+                runtime.advance_task(
+                    session_id, trigger, reason="编排器完成",
+                    request_id=payload.request_id,
+                    idempotency_key=f"orch-{trigger}-{payload.request_id or 'auto'}",
+                )
+            except RuntimeFailure:
+                break
+
+        final_state = runtime.get_state(session_id)["state"]
+        return schemas.OrchestrateView(
+            session_id=session_id, state=final_state, answer=answer,
+            route=trace.route, draft=trace.draft, calls=list(trace.calls),
+            fact_ids=list(trace.fact_ids),
+            research_trace_id=trace.research_trace_id,
+            research_error=trace.research_error,
         )
 
     # ---------- 读 ----------
