@@ -180,9 +180,9 @@ Atlas API 和 CompassRAG Research API 分别启动。Atlas 使用 HTTP adapter �
 |---|---|---|
 | 阶段 0 核对现状与冻结边界 | ✅ | 记录双方 schema/路由/运行方式；CompassRAG 未提交工作树先冻结（基线 `cd20f02` + dirty `8eb7c5a`）；`atlas/tools/protocol.py` 与 `compassrag/agent/schemas.py` 字段对照一致 |
 | 阶段 1 契约与本地端到端 | ✅ | `tests/test_compassrag_bridge.py`（8 项：成功映射 / 证据 retriever+rank / trace 回读 / 幂等 / 五类失败 / 编排写 Fact）；`examples/atlas_compassrag_demo.py` 离线跑通全链路 |
-| 阶段 2 HTTP 服务化与运行恢复 | ◐ | HTTP adapter 与 HTTP 契约测试此前已存在（`tests/test_research_tool.py`、`tests/test_research_api.py`）；合并后同一套 `ResearchTool` 契约测试同时覆盖本地与 HTTP；真实服务重启恢复仍需联调（需真实索引与模型预算） |
-| 阶段 3 统一演示与文档 | ✅ | 根 `README.md`、本文件、`docs/compassrag/`；一条命令 `examples/atlas_compassrag_demo.py` 展示证据引用与失败路径；Web 工作台仍只覆盖 CompassRAG 侧 |
-| 阶段 4 系统级评测 | ◐ | 两层各自指标保留原口径（Atlas：`docs/evaluation.md`；CompassRAG：`docs/compassrag/evaluation.md`）；端到端任务级评测集未建，不宣称合并收益 |
+| 阶段 2 HTTP 服务化与运行恢复 | ✅ | `tests/test_http_server_roundtrip.py`：真起 uvicorn 子进程跑 CompassRAG `/research`（3 项）——HTTP 契约字段、同端口杀掉重启后仍可用、PAUSED 任务恢复且 repository 幂等键阻止重复写 Fact。与本地 adapter 共用 `ResearchTool` 契约测试 |
+| 阶段 3 统一演示与文档 | ✅ | 根 `README.md`、本文件、`docs/compassrag/`；一条命令 `examples/atlas_compassrag_demo.py` 展示证据引用、失败路径并生成统一 HTML 报告；`atlas report <session> --db <db>` 把状态/角色/证据/CompassRAG trace 收在一页。交互式 Web 工作台仍只覆盖 CompassRAG 侧 |
+| 阶段 4 系统级评测 | ✅（离线器械级） | 两层指标保留原口径（Atlas：`docs/evaluation.md`；CompassRAG：`docs/compassrag/evaluation.md`）；新增 `integration/merged_e2e.py` + `scripts/run_merged_e2e.py`：五类任务场景（多来源证据 / 来源冲突 / 需要修订 / 工具失败 / 暂停恢复），产出 `runs/merged_e2e/summary.json` 并进测试。**口径**：脚本化模型 + 关键词检索，只验证流水线与判分，不是效果数字；真实模型端到端仍未做 |
 
 
 ### 阶段 0：核对现状与冻结边界
@@ -271,17 +271,20 @@ pyproject.toml    # 一个项目、两个包（setuptools package-dir 发现 atl
 - CompassRAG `ResearchResult` → Atlas `ResearchResult`，证据补 `retriever` / `rank`；
 - CompassRAG 的六类 `failure` → Atlas 五类错误（`cancelled` 归 `upstream_error`，因为 Atlas 的错误词表固定为五类）；
 - `get_trace(trace_id)` 直接回读 CompassRAG 轨迹，不重新调模型；
-- Orchestrator 成功/失败路径都把 CompassRAG 的 `trace_id` 写进 `OrchestrationTrace.research_trace_id`。
+- Orchestrator 成功/失败路径都把 CompassRAG 的 `trace_id` 写进 `OrchestrationTrace.research_trace_id`；
+  研究 Fact 的 `meta` 同时落 `research_trace_id` / 停止原因 / 轮数 / 置信度，统一报告据此下钻。
 
 ### 12.3 验收命令
 
 ```bash
-pytest -q                                    # 561 passed, 6 skipped
-python examples/atlas_compassrag_demo.py     # 规划→取证→证据入图→核验→失败路径
+pytest -q                                    # 569 passed, 6 skipped
+python examples/atlas_compassrag_demo.py     # 规划→取证→证据入图→核验→失败路径 + HTML 报告
+python scripts/run_merged_e2e.py             # 五类任务场景的离线评测（机制验证）
+python -m atlas.cli report <session> --db <db> [--research-base-url http://127.0.0.1:8000]
 ```
 
 ### 12.4 仍未做 / 诚实边界
 
-- 端到端任务级评测集未建；两层数字仍各自报告，没有"合并后提升"的结论。
-- HTTP 模式下"服务重启 + 未完成请求续跑"只做了契约与单测级覆盖，没有真实进程级演练。
-- Web 工作台只展示 CompassRAG 侧；Atlas 任务状态尚无统一页面。
+- 端到端任务级评测目前是**离线脚手架**（脚本化模型）：验证流水线闭合与判分有效，不是效果数字；真实模型端到端仍未做。
+- HTTP 恢复只演练到「服务子进程被杀→重启→Atlas 从 checkpoint 恢复→幂等不重复写 Fact」；断连中的流式请求、真实索引重建与预算耗尽未覆盖。
+- 统一入口目前是静态 HTML 报告（`atlas report`）+ CompassRAG 的 Vite 工作台；**交互式**统一工作台（同一页操作 Atlas 任务与检索轨迹）仍未做。

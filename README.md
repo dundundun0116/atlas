@@ -4,7 +4,7 @@
   <img src="docs/architecture.png" alt="Atlas 运行时示意图" width="720">
 </p>
 
-![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Tests](https://img.shields.io/badge/tests-561%20passed-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Tests](https://img.shields.io/badge/tests-569%20passed-brightgreen)
 
 **面向长程研究任务的可恢复多智能体运行时（Atlas）+ 自适应检索决策引擎（CompassRAG）。**
 
@@ -45,7 +45,7 @@ Orchestrator（LangGraph 只表达控制流）
 - **真实进程内桥接**：`atlas/tools/compassrag.py` 的 `CompassRAGAgentTool` 直接驱动同仓 CompassRAG Agent，不需要先起 HTTP 服务；请求/证据/失败/trace 做确定性映射，`failure` 归一到 Atlas 五类错误。
 - **证据可追溯**：证据项带 `retriever` / `rank`；Atlas 的 OrchestrationTrace 记录 CompassRAG 自己的 `trace_id`，一条命令即可从总任务下钻到单次检索轨迹。
 - **一条命令看闭环**：`examples/atlas_compassrag_demo.py` 用真实代码路径（真 Orchestrator + 真 CompassRAG Agent + SQLite 仓库）跑完「规划 → 取证 → 证据入图 → 核验 → 失败路径」，全程离线、零密钥。
-- **一套环境/一套测试**：一个 `pyproject.toml` 装两个包，`pytest` 一次跑完 561 项（6 项文档一致性检查在无 `runs/qa` 时跳过）。
+- **一套环境/一套测试**：一个 `pyproject.toml` 装两个包，`pytest` 一次跑完 569 项（6 项文档一致性检查在无 `runs/qa` 时跳过）。
 
 ## 快速开始
 
@@ -67,7 +67,14 @@ python examples/research_agent.py
 python -m atlas.demo                          # 产物：runs/demo/graph.html / graph.svg
 streamlit run atlas/demo_app.py               # 交互式观察结转过程（需 ".[demo]"）
 
-# 6) 全部测试
+# 6) 端到端任务级评测（离线脚手架，只验证机制）
+python scripts/run_merged_e2e.py
+
+# 7) 统一任务报告（HTML：状态 / 角色步骤 / 证据 / CompassRAG trace）
+python -m atlas.cli report <session_id> --db <SQLite 路径> \
+    --research-base-url http://127.0.0.1:8000
+
+# 8) 全部测试
 pytest -q
 ```
 
@@ -84,6 +91,7 @@ bash scripts/demo.sh                       # 一条命令起 FastAPI + Vite 工�
 
 - **Atlas 运行时**：MemoryArena `formal_reasoning_math` 官方 runner 不改动，A/B 只差一行 config；另有「三类长程 fixture × 三种记忆策略 + 五类故障注入 + replay」的离线评测。口径与复现命令见 [docs/evaluation.md](docs/evaluation.md)，环境说明见 [eval/README.md](eval/README.md)。
 - **CompassRAG 检索层**：MuSiQue 同题集消融阶梯（naive → 改写 → 实体图 → 决策层 → 全家桶 → 证据核验），指标、样本量与已知局限见 [docs/compassrag/README.md](docs/compassrag/README.md) 与 [docs/compassrag/evaluation.md](docs/compassrag/evaluation.md)。
+- **合并链路（离线）**：`integration/merged_e2e.py` 五类任务场景，验证的是「编排→检索→证据入图→修订/失败隔离→恢复」是否闭合与判分是否有效，**不是效果数字**；真实端到端数字仍需真实模型 + 固定题集/索引 + 重复。
 - **口径纪律**：离线脚手架结果只验证指标，真实模型结果才可作为效果数字；小样本只作演示，不写成普适结论。两层各自报告数字，不把检索层收益合并成端到端提升。
 
 ## 项目结构
@@ -100,7 +108,7 @@ atlas/
 │   ├── api/               #   FastAPI 薄壳（任务 API）
 │   ├── observability/     #   结构化 trace
 │   ├── evaluation/        #   三 fixture × 三策略 + 故障注入 + replay
-│   └── demo.py / export.py / cli.py
+│   └── demo.py / export.py / cli.py / report.py
 ├── compassrag/            # 检索层
 │   ├── agent/             #   契约 / 统一工具协议 / 控制流（顺序实现 + LangGraph）
 │   ├── decision/          #   路由、计划、证据充分度早停
@@ -111,12 +119,13 @@ atlas/
 │   ├── adapters/          #   Atlas 本地与 HTTP adapter（同一 ResearchTool 协议）
 │   └── eval/              #   trace / manifest / 指标 / 断点续跑
 ├── examples/              # 合并闭环 / quickstart / research_agent
+├── integration/           # 跨层脚手架：任务级离线评测（不进任一方的包）
 ├── scripts/               # Atlas 评测入口 + CompassRAG 语料/索引/评测/服务脚本
 ├── configs/               # CompassRAG 模型端点与消融开关
 ├── data/samples/          # 三基准分层抽样清单（seed=42，入仓可复现）
 ├── web/                   # CompassRAG 研究工作台（Vite + React + TS）
 ├── eval/                  # MemoryArena 评测脚手架（memory server / configs）
-├── tests/                 # 两层的单元测试（561 项，无需真实 API）
+├── tests/                 # 两层的单元测试（569 项，无需真实 API；含 HTTP 重启用例）
 └── docs/                  # Atlas 文档 + compassrag/ 检索层文档 + 架构图
 ```
 
@@ -133,7 +142,8 @@ atlas/
 - [x] 单仓合并：一套依赖、一套测试、一份文档入口
 - [ ] 真实模型端到端评测（固定任务集、预算、重复次数）——效果数字的前提
 - [ ] 角色消融（Planner / Worker / Auditor 各自贡献拆分）
-- [ ] 统一工作台：在同一页看 Atlas 任务状态与 CompassRAG 证据轨迹
+- [x] 统一任务报告（静态 HTML：状态 / 角色 / 证据 / CompassRAG trace 下钻）
+- [ ] 交互式统一工作台：把 Atlas 任务状态并入 Vite 工作台（当前 Web 仍只覆盖检索层）
 
 ## License
 
