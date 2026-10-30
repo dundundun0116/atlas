@@ -15,6 +15,7 @@ import time
 import pytest
 
 from atlas.orchestration import OrchestrationError, Orchestrator, TaskState, TaskStateMachine
+from atlas.orchestration.state_machine import allowed_triggers
 from atlas.orchestration.policies import (
     AUDIT_OUTCOMES,
     ROLE_POLICIES,
@@ -522,3 +523,19 @@ class TestAuditorRefsMustExist:
         Orchestrator(ScriptedLLM([PLAN, "草稿解答", audit]), FakeGraph(),
                      machine=machine).solve("题目：给出上界")
         assert machine.state == TaskState.COMPLETED
+
+class TestAllowedTriggers:
+    def test_forward_triggers_match_state_and_are_legal(self):
+        for state in TaskState:
+            for trigger in allowed_triggers(state):
+                machine = TaskStateMachine(initial=state)
+                machine.apply(trigger, reason="界面按钮")
+        assert "audit_fatal" not in allowed_triggers(TaskState.AUDITING)
+        assert "fail" not in allowed_triggers(TaskState.PLANNING)
+        assert "resume" not in allowed_triggers(TaskState.PAUSED)
+
+    def test_pause_only_in_active_states_and_terminal_has_none(self):
+        assert "pause" in allowed_triggers(TaskState.PLANNING)
+        assert allowed_triggers(TaskState.PAUSED) == []
+        assert allowed_triggers(TaskState.COMPLETED) == []
+        assert allowed_triggers(TaskState.FAILED) == []

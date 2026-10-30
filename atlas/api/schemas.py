@@ -100,6 +100,7 @@ class TaskStateView(BaseModel):
     goal: str
     state: str
     failure_reason: str = ""
+    allowed_triggers: List[str] = Field(default_factory=list)
     nodes: List[NodeView] = Field(default_factory=list)
     edges: List[EdgeView] = Field(default_factory=list)
     checkpoint: Optional[CheckpointView] = None

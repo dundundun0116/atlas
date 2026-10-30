@@ -12,7 +12,12 @@ from uuid import uuid4
 from atlas.context.provenance import audit_nodes
 from atlas.memory.schema import NodeStatus, NodeType
 from atlas.observability.tracing import Tracer
-from atlas.orchestration.state_machine import IllegalTransition, TaskState, TaskStateMachine
+from atlas.orchestration.state_machine import (
+    IllegalTransition,
+    TaskState,
+    TaskStateMachine,
+    allowed_triggers,
+)
 from atlas.service import ServiceRuntime
 from atlas.storage import events as storage_events
 from atlas.storage.repository import GraphRepository
@@ -197,6 +202,9 @@ class AgentRuntime:
             "state": view["state"],
             "failure_reason": (
                 runtime.machine.failure_reason if runtime.machine is not None else ""
+            ),
+            "allowed_triggers": (
+                allowed_triggers(runtime.machine.state) if runtime.machine is not None else []
             ),
             "nodes": [
                 {

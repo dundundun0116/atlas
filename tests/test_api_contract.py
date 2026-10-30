@@ -148,6 +148,8 @@ class TestStateView:
         assert body["nodes"][0]["source"] == "paper:1"
         assert body["checkpoint"]["pending_role"] == "worker"
         assert body["provenance"]["stale"] == []
+        assert body["failure_reason"] == ""
+        assert body["allowed_triggers"] == ["work_done", "pause"]
 
 
 class TestTrace:

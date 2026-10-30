@@ -28,6 +28,7 @@ export interface AtlasTask {
   goal: string;
   state: string;
   failure_reason: string;
+  allowed_triggers: string[];
   nodes: AtlasNode[];
   edges: { src: string; dst: string; type: string }[];
   checkpoint: Record<string, unknown> | null;
@@ -64,6 +65,47 @@ export async function createAtlasTask(payload: CreateTaskPayload): Promise<{ ses
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
+  });
+  return json<{ session_id: string; state: string }>(res);
+}
+
+export async function advanceAtlasTask(
+  sessionId: string,
+  trigger: string,
+  reason = "工作台推进",
+): Promise<{ session_id: string; state: string }> {
+  const res = await fetch(`${BASE}/tasks/${encodeURIComponent(sessionId)}/advance`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      trigger,
+      reason,
+      request_id: `req-${Date.now()}`,
+      idempotency_key: `advance-${sessionId}-${trigger}-${Date.now()}`,
+    }),
+  });
+  return json<{ session_id: string; state: string }>(res);
+}
+
+export async function pauseAtlasTask(
+  sessionId: string,
+  reason = "工作台暂停",
+): Promise<{ session_id: string; state: string }> {
+  const res = await fetch(`${BASE}/tasks/${encodeURIComponent(sessionId)}/pause`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ reason, request_id: `req-${Date.now()}` }),
+  });
+  return json<{ session_id: string; state: string }>(res);
+}
+
+export async function resumeAtlasTask(
+  sessionId: string,
+): Promise<{ session_id: string; state: string }> {
+  const res = await fetch(`${BASE}/tasks/${encodeURIComponent(sessionId)}/resume`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ request_id: `req-${Date.now()}` }),
   });
   return json<{ session_id: string; state: string }>(res);
 }

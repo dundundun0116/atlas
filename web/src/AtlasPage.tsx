@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  advanceAtlasTask,
   createAtlasTask,
   getAtlasReport,
   getAtlasTask,
+  pauseAtlasTask,
+  resumeAtlasTask,
   type AtlasReport,
   type AtlasNode,
   type AtlasTask,
@@ -27,6 +30,15 @@ function parseEvidence(raw: string): EvidenceItem[] {
     return [];
   }
 }
+
+const TRIGGER_LABELS: Record<string, string> = {
+  plan_ready: "规划完成",
+  work_done: "执行完成",
+  audit_pass: "审核通过",
+  audit_repair: "打回修订",
+  repair_done: "修订完成",
+  pause: "暂停",
+};
 
 function evidenceLabel(item: EvidenceItem): string {
   const source = item.source || item.chunk_id || "未知来源";
@@ -82,6 +94,21 @@ export default function AtlasPage() {
       setLoading(false);
     }
   }, []);
+
+  const act = useCallback(
+    async (operation: () => Promise<unknown>) => {
+      setLoading(true);
+      setError(null);
+      try {
+        await operation();
+        await load(sessionId);
+      } catch (e) {
+        setError(String(e));
+        setLoading(false);
+      }
+    },
+    [load, sessionId],
+  );
 
   const create = useCallback(async () => {
     const target = sessionId.trim();
@@ -163,6 +190,22 @@ export default function AtlasPage() {
             {task.failure_reason && (
               <p className="error">失败原因：{task.failure_reason}</p>
             )}
+            <div className="atlas-actions">
+              {task.allowed_triggers.map((trigger) => (
+                <button
+                  key={trigger}
+                  disabled={loading}
+                  onClick={() => act(() => advanceAtlasTask(sessionId, trigger))}
+                >
+                  {TRIGGER_LABELS[trigger] ?? trigger}
+                </button>
+              ))}
+              {task.state === "paused" && (
+                <button disabled={loading} onClick={() => act(() => resumeAtlasTask(sessionId))}>
+                  恢复
+                </button>
+              )}
+            </div>
           </section>
 
           <section className="panel">

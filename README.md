@@ -4,7 +4,7 @@
   <img src="docs/architecture.png" alt="Atlas 运行时示意图" width="720">
 </p>
 
-![CI](https://github.com/dundundun0116/atlas/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Tests](https://img.shields.io/badge/tests-573%20passed-brightgreen)
+![CI](https://github.com/dundundun0116/atlas/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Tests](https://img.shields.io/badge/tests-575%20passed-brightgreen)
 
 **面向长程研究任务的可恢复多智能体运行时（Atlas）+ 自适应检索决策引擎（CompassRAG）。**
 
@@ -80,7 +80,7 @@ python -m atlas.cli report <session_id> --db <SQLite 路径> \
 
 # 9) 全部测试
 pytest -q                      # 后端 573 项
-cd web && npm test             # 前端 15 项
+cd web && npm test             # 前端 16 项
 ```
 
 CompassRAG 的检索侧可以单独使用与评测（真实索引需要先按 [docs/compassrag/README.md](docs/compassrag/README.md) 构建语料/索引，并配置 `.env`）：
@@ -148,7 +148,7 @@ atlas/
 - [ ] 真实模型端到端评测（固定任务集、预算、重复次数）——效果数字的前提
 - [ ] 角色消融（Planner / Worker / Auditor 各自贡献拆分）
 - [x] 统一任务报告（静态 HTML：状态 / 角色 / 证据 / CompassRAG trace 下钻）
-- [x] 统一工作台：Vite `/atlas` 页（创建任务 / 状态 / 角色步骤 / 图节点 / 证据 / 报告）
+- [x] 统一工作台：Vite `/atlas` 页（创建任务 / 推进·暂停·恢复 / 状态 / 角色步骤 / 图节点 / 证据 / 报告）
 
 ## License
 

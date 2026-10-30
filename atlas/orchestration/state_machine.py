@@ -68,6 +68,30 @@ TRIGGER_TARGETS: Dict[str, Optional[TaskState]] = {
 }
 
 
+#: 面向 UI 的「正常推进」触发词（审计 fatal / 异常 fail 不暴露给操作者；
+#: resume 由专用恢复语义处理）。函数仍逐条用 LEGAL_TRANSITIONS 校验，防止与状态机漂移。
+_UI_FORWARD_TRIGGERS: Dict[str, tuple] = {
+    "planning": ("plan_ready",),
+    "executing": ("work_done",),
+    "auditing": ("audit_pass", "audit_repair"),
+    "repairing": ("repair_done",),
+}
+
+
+def allowed_triggers(state: "TaskState | str") -> List[str]:
+    """当前状态下可用的推进触发词，供工作台/CLI 只列出合法按钮。"""
+    current = TaskState(state)
+    legal_targets = LEGAL_TRANSITIONS[current]
+    triggers = [
+        trigger
+        for trigger in _UI_FORWARD_TRIGGERS.get(current.value, ())
+        if TRIGGER_TARGETS.get(trigger) in legal_targets
+    ]
+    if current in ACTIVE_STATES:
+        triggers.append("pause")
+    return triggers
+
+
 class IllegalTransition(RuntimeError):
     """当前状态不允许该触发词；状态保持不变，尝试已记入 violations。"""
 

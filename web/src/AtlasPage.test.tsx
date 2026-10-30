@@ -7,6 +7,7 @@ const TASK = {
   goal: "回答：爱因斯坦出生于哪一年？",
   state: "executing",
   failure_reason: "",
+  allowed_triggers: ["work_done", "pause"],
   nodes: [
     {
       id: "D1", type: "decision", status: "active", content: "先检索再作答",
@@ -77,6 +78,21 @@ describe("AtlasPage", () => {
     await waitFor(() => {
       const calls = fetchMock.mock.calls.map(([url]) => String(url));
       expect(calls.some((url) => url.includes("/atlas-api/tasks/session-42"))).toBe(true);
+    });
+  });
+
+  it("点击推进按钮调用 advance 并刷新", async () => {
+    render(<AtlasPage />);
+    await screen.findByText(/爱因斯坦出生于哪一年/);
+    fireEvent.click(screen.getByRole("button", { name: "执行完成" }));
+    await waitFor(() => {
+      const advances = fetchMock.mock.calls.filter(
+        ([url, init]) => init?.method === "POST" && String(url).includes("/advance"),
+      );
+      expect(advances.length).toBe(1);
+      expect(String(advances[0][0])).toContain("/atlas-api/tasks/demo/advance");
+      const body = JSON.parse(String((advances[0][1] as RequestInit).body));
+      expect(body.trigger).toBe("work_done");
     });
   });
 

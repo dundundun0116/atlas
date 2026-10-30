@@ -181,7 +181,7 @@ Atlas API 和 CompassRAG Research API 分别启动。Atlas 使用 HTTP adapter �
 | 阶段 0 核对现状与冻结边界 | ✅ | 记录双方 schema/路由/运行方式；CompassRAG 未提交工作树先冻结（基线 `cd20f02` + dirty `8eb7c5a`）；`atlas/tools/protocol.py` 与 `compassrag/agent/schemas.py` 字段对照一致 |
 | 阶段 1 契约与本地端到端 | ✅ | `tests/test_compassrag_bridge.py`（8 项：成功映射 / 证据 retriever+rank / trace 回读 / 幂等 / 五类失败 / 编排写 Fact）；`examples/atlas_compassrag_demo.py` 离线跑通全链路 |
 | 阶段 2 HTTP 服务化与运行恢复 | ✅ | `tests/test_http_server_roundtrip.py`：真起 uvicorn 子进程跑 CompassRAG `/research`（3 项）——HTTP 契约字段、同端口杀掉重启后仍可用、PAUSED 任务恢复且 repository 幂等键阻止重复写 Fact。与本地 adapter 共用 `ResearchTool` 契约测试 |
-| 阶段 3 统一演示与文档 | ✅ | 根 `README.md`、本文件、`docs/compassrag/`；一条命令 `examples/atlas_compassrag_demo.py` 展示证据引用、失败路径并生成统一 HTML 报告；`atlas report <session> --db <db>` 把状态/角色/证据/CompassRAG trace 收在一页。Web 侧新增 `web/` 的 `/atlas` 页：可创建任务，并查看任务状态 / 角色步骤 / 图节点 / 证据 / 失败原因 / 报告；研究页仍在 `/`；页面不推进任务、不发起检索 |
+| 阶段 3 统一演示与文档 | ✅ | 根 `README.md`、本文件、`docs/compassrag/`；一条命令 `examples/atlas_compassrag_demo.py` 展示证据引用、失败路径并生成统一 HTML 报告；`atlas report <session> --db <db>` 把状态/角色/证据/CompassRAG trace 收在一页。Web 侧新增 `web/` 的 `/atlas` 页：可创建任务、按 `allowed_triggers`（服务端给出的合法转移）推进/暂停/恢复，并查看状态 / 角色步骤 / 图节点 / 证据 / 失败原因 / 报告；研究页仍在 `/`；页面不发起检索、不触发编排 |
 | 阶段 4 系统级评测 | ✅（离线器械级） | 两层指标保留原口径（Atlas：`docs/evaluation.md`；CompassRAG：`docs/compassrag/evaluation.md`）；新增 `integration/merged_e2e.py` + `scripts/run_merged_e2e.py`：五类任务场景（多来源证据 / 来源冲突 / 需要修订 / 工具失败 / 暂停恢复），产出 `runs/merged_e2e/summary.json` 并进测试。**口径**：脚本化模型 + 关键词检索，只验证流水线与判分，不是效果数字；真实模型端到端仍未做 |
 
 
@@ -287,4 +287,4 @@ python -m atlas.cli report <session> --db <db> [--research-base-url http://127.0
 
 - 端到端任务级评测目前是**离线脚手架**（脚本化模型）：验证流水线闭合与判分有效，不是效果数字；真实模型端到端仍未做。
 - HTTP 恢复只演练到「服务子进程被杀→重启→Atlas 从 checkpoint 恢复→幂等不重复写 Fact」；断连中的流式请求、真实索引重建与预算耗尽未覆盖。
-- 统一入口是 Vite 工作台的 `/atlas` 页 + 静态 HTML 报告（`atlas report`）+ CompassRAG 研究页；**同一页内联动操作**（在任务页直接发起检索、推进任务）仍未做，`/atlas` 不写任务状态机（只创建任务）。
+- 统一入口是 Vite 工作台的 `/atlas` 页 + 静态 HTML 报告（`atlas report`）+ CompassRAG 研究页；**任务页发起检索/触发编排**仍未做（`/atlas` 只推进状态机，不调模型、不调 ResearchTool）。
