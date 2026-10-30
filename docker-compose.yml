@@ -1,0 +1,28 @@
+# 一条命令起前后端：docker compose up --build
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # 模型与密钥从 .env 注入（不要写进镜像）
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      HF_ALLOW_DOWNLOAD: ${HF_ALLOW_DOWNLOAD:-0}
+      LLM_FORCE_IPV4: ${LLM_FORCE_IPV4:-1}
+    volumes:
+      - ./data:/app/data          # 语料与索引缓存
+      - ./runs:/app/runs          # trace / manifest / 上传文档与版本
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  web:
+    build: ./web
+    ports:
+      - "5173:80"
+    depends_on:
+      - api

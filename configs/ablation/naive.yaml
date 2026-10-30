@@ -1,0 +1,14 @@
+# 消融第 0 级：naive —— scripted 单轮固定检索 + 直接生成
+# 检索 = 混合（BM25 + BGE-M3 稠密两路 RRF，需先跑 scripts/embed_corpus.py 出向量）
+# 注：deepseek-v4.1-flash 带思维链（实测 completion_tokens=推理+答案）。预算 512 时约 27% 的题
+# 推理链吃光预算出空答案（2026-10-10 诊断，runs/diag/）；故首轮 1024，空答案带收尾提示
+# 按 2048→4096 阶梯重试（实测逐级提高可救回打转，残留空答约 1-3%）。
+agent:
+  top_k: 10
+  max_rounds: 1
+  use_dense: true
+  use_rewrite: false
+  use_wiki: false
+  use_decision: false
+  answer_max_tokens: 1024
+  answer_retry_budgets: [2048, 4096]

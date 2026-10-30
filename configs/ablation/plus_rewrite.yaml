@@ -1,0 +1,11 @@
+# 消融第 2 级（+② 查询改写融合）：naive + 多跳分解 + HyDE + 多查询×多路 RRF + 近重合并
+# 变体 = 原问题 + 子问题（≤4）+ HyDE 假答案段落；近重合并（余弦 ≥0.92）需稠密向量
+agent:
+  top_k: 10
+  max_rounds: 1
+  use_dense: true
+  use_wiki: false
+  use_rewrite: true
+  use_decision: false
+  answer_max_tokens: 1024
+  answer_retry_budgets: [2048, 4096]

@@ -1,0 +1,8 @@
+# 非密钥运行配置；密钥一律放 .env（见 .env.example）
+request:
+  timeout_s: 120
+  max_retries: 4
+embedding:
+  batch_size: 96
+telemetry:
+  path: runs/telemetry.jsonl

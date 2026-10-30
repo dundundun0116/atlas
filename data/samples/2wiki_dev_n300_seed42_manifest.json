@@ -1,0 +1,16 @@
+{
+  "benchmark": "2wiki",
+  "seed": 42,
+  "n_population": 12576,
+  "n_sampled": 300,
+  "allocation": {
+    "bridge_comparison": 66,
+    "comparison": 72,
+    "compositional": 125,
+    "inference": 37
+  },
+  "source_file": "validation-00000-of-00001.parquet",
+  "source_sha256": "408e2dbb28edc6c8b9ca3ba0c94d4fc7bf17ffb923766593a3a7f546ab4cba59",
+  "output_file": "2wiki_dev_n300_seed42.jsonl",
+  "output_sha256": "1d6c9d9b54ab8c1acd1c07936099d1f9eafa237003ed4c42c3be02d5e9dbd346"
+}

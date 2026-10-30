@@ -1,0 +1,13 @@
+{
+  "benchmark": "hotpotqa",
+  "seed": 42,
+  "n_population": 7405,
+  "n_sampled": 300,
+  "allocation": {
+    "hard": 300
+  },
+  "source_file": "validation-00000-of-00001.parquet",
+  "source_sha256": "c20b638ca82b21d04fe12e14ff417ad05153d4d215a65de54497fca4e972f7c6",
+  "output_file": "hotpotqa_dev_n300_seed42.jsonl",
+  "output_sha256": "20442f7b7d7aae3fc06fd21ab6e5768ef49e123804617334bc7ed520cdb65a6a"
+}

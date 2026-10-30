@@ -1,0 +1,18 @@
+# M2 证据闭环行：plus_full + claim 级核验 + 一次有限修复
+# 与 plus_full 的唯一差异是 use_verifier；答案调用协议不变（短答），
+# 核验是**独立第二次调用**，因此 EM/F1 与历史行仍可比（只多花 token）。
+agent:
+  top_k: 10
+  max_rounds: 3
+  max_evidence: 20
+  use_dense: true
+  use_wiki: false
+  use_kg: true
+  use_rewrite: true
+  use_decision: true
+  answer_max_tokens: 1024
+  answer_retry_budgets: [2048, 4096]
+  # ---- M2 ----
+  use_verifier: true
+  max_repairs: 1            # 全局最多补检索一次；用尽后拒答（unknown）
+  refuse_on_empty_evidence: false   # 本语料不会检空；开启会改变历史行口径

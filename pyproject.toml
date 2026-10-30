@@ -1,13 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "atlas"
+name = "atlas-research-agent"
 version = "0.1.0"
-description = "Atlas: graph-memory, context management, and multi-agent orchestration for long-horizon tasks"
+description = "Atlas Research Agent：可恢复的长程研究运行时（Atlas）+ 自适应检索决策引擎（CompassRAG）"
 requires-python = ">=3.10"
 dependencies = [
+    # Atlas 运行时
     "sqlalchemy>=2.0",
     "langgraph>=0.2",
     "fastapi>=0.110",
+    "pydantic>=2.6",
+    # CompassRAG 检索引擎
+    "openai>=1.40",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "huggingface_hub>=0.24",
+    "numpy>=1.26",
+    "pyarrow>=15",
+    "bm25s>=0.2",
+    "scikit-learn>=1.4",
+    # 评测与上下文预算
+    "tiktoken>=0.6",
 ]
+
+[project.optional-dependencies]
+# 服务化：CompassRAG Research API / 前端工作台
+api = ["uvicorn>=0.29", "python-multipart>=0.0.9"]
+# 本地稠密检索（BGE-M3，首跑自动从 HF 拉模型）
+dense = ["sentence-transformers>=2.7"]
+# Atlas 演示页
+demo = ["streamlit>=1.30"]
+# 测试
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[project.scripts]
+atlas = "atlas.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["atlas*", "compassrag*"]
+exclude = ["tests*", "docs*", "web*", "scripts*", "configs*", "data*", "examples*", "eval*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

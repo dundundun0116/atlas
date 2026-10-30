@@ -38,3 +38,26 @@ _ledger-log/
 docs/superpowers/
 docs/interview-qa.md
 docs/project-review-handoff.md
+
+# ---- 合并 CompassRAG 后追加 ----
+# 前端依赖与构建产物
+web/node_modules/
+web/dist/
+web/coverage/
+# 语料缓存与原始数据（抽样清单入仓）
+data/cache/
+data/raw/
+*.parquet
+*.faiss
+outputs/
+# 合并进来的 CompassRAG 内部材料（本机留档，不入公开仓库）
+docs/internal/
+
+# uv 本地缓存（合并安装用）
+.uv-cache/
+
+# Python 打包产物
+*.egg-info/
+
+# 本地工具产物
+.workbuddy/

@@ -1,0 +1,13 @@
+# 消融第 3 级（+① 决策层）：控制流交给 LLM——路由（direct/single/multi）+ 多跳子问题
+# 计划 + 证据充分度早停 + 检索预算上限（max_rounds）
+# 叠加在 ② 之上；③ 因检索层无净增益暂不并入（见 PROJECT.md §11 实测）
+agent:
+  top_k: 10
+  max_rounds: 3
+  max_evidence: 20
+  use_dense: true
+  use_wiki: false
+  use_rewrite: true
+  use_decision: true
+  answer_max_tokens: 1024
+  answer_retry_budgets: [2048, 4096]
