@@ -12,19 +12,39 @@ def run_records(records: list[dict], step_fn, out_path: Path) -> tuple[list[dict
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     done: set[str] = set()
+    existing: list[dict] = []
+    dirty = False
     if out_path.exists():
         with out_path.open(encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if line:
-                    done.add(json.loads(line)["id"])
+                if not line:
+                    dirty = True
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    dirty = True
+                    continue
+                if not isinstance(row, dict) or not row.get("id"):
+                    dirty = True
+                    continue
+                row_id = str(row["id"])
+                if row_id in done:
+                    dirty = True
+                    continue
+                done.add(row_id)
+                existing.append(row)
 
     new_rows: list[dict] = []
-    skipped = 0
-    with out_path.open("a", encoding="utf-8") as f:
+    skipped = sum(1 for r in records if str(r["id"]) in done)
+    mode = "w" if dirty else "a"
+    with out_path.open(mode, encoding="utf-8") as f:
+        if dirty:
+            for row in existing:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
         for r in records:
-            if r["id"] in done:
-                skipped += 1
+            if str(r["id"]) in done:
                 continue
             row = step_fn(r)
             f.write(json.dumps(row, ensure_ascii=False) + "\n")

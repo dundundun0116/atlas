@@ -46,6 +46,10 @@ export function CorpusPanel(props: {
             <dt>最新构建</dt>
             <dd>{props.status.built_version || "—"}</dd>
           </div>
+          <div>
+            <dt>可用检索</dt>
+            <dd>{props.status.available_tools?.join("/") || "无"}</dd>
+          </div>
         </dl>
       ) : (
         <p className="muted">未启用语料管理（后端未挂载 ingest）</p>
@@ -54,6 +58,11 @@ export function CorpusPanel(props: {
         <p className="hint">⚠ 运行时索引与最新构建不是同一版：数字与回答可能对不上。</p>
       )}
       {props.status?.last_error && <p className="hint">最近一次构建错误：{props.status.last_error}</p>}
+      {props.status?.stage_status && (
+        <p className="hint">
+          阶段：{Object.entries(props.status.stage_status).map(([name, state]) => `${name}:${state}`).join(" · ")}
+        </p>
+      )}
 
       <div className="corpus-form">
         <div className="controls">

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Sequence
+from typing import Callable
 
 from ..agent.schemas import Claim, VerificationResult
 
@@ -95,7 +96,8 @@ def resolve_claims(raw: dict, evidence_ids: Sequence[str]) -> list[Claim]:
 
 
 def verify_answer(llm, question: str, answer: str, evidence: Sequence[tuple[str, str]],
-                  *, budgets: tuple = VERIFIER_BUDGETS) -> tuple[VerificationResult, list]:
+                  *, budgets: tuple = VERIFIER_BUDGETS,
+                  cancel_check: Callable[[], bool] | None = None) -> tuple[VerificationResult, list]:
     """核验一次答案；返回 (结果, 消耗的 LLM 调用)。evidence 为 [(chunk_id, 文本)]。"""
     if not evidence:
         # 没有证据时无需调模型：任何断言都不可能被支持
@@ -110,6 +112,8 @@ def verify_answer(llm, question: str, answer: str, evidence: Sequence[tuple[str,
     ]
     calls: list = []
     for n, budget in enumerate(budgets):
+        if cancel_check is not None and cancel_check():
+            break
         msgs = messages if n == 0 else messages + [{"role": "user", "content": VERIFIER_NUDGE}]
         resp = llm.chat(msgs, tag="verify" if n == 0 else "verify_retry",
                         max_tokens=int(budget))

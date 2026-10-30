@@ -236,10 +236,12 @@ class IngestStore:
                 result.error = result.error or "bm25_failed"
             stages[1].elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
 
-        stages[2].status = "ok" if dense else "skipped"
-        stages[2].detail = "已在构建" if dense else "未启用（需要本地 BGE-M3）"
-        stages[3].status = "ok" if entity_graph else "skipped"
-        stages[3].detail = "已在构建" if entity_graph else "未启用（实体抽取需要付费 LLM）"
+        # The ingest path currently materializes BM25 only.  Do not report
+        # optional stages as successful merely because the caller requested them.
+        stages[2].status = "skipped"
+        stages[2].detail = "未实现：上传文档索引暂不构建向量"
+        stages[3].status = "skipped"
+        stages[3].detail = "未实现：上传文档索引暂不构建实体图"
 
         result.n_chunks = len(chunks)
         if not result.error and not any(s.status == "ok" for s in stages[1:2]):

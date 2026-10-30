@@ -19,6 +19,8 @@
 > **2026-10-28 用新管线（Pydantic 契约 / 工具协议 / 证据闭环 / LangGraph）重测**；行间同题集、同语料、同预算口径，全部 50 题。
 > 检索侧与旧版逐位一致（naive 与 +rewrite 的召回、证据完全复现）；EM 与旧值相差 ±2–4 题的原因是**答案表面形式漂移**（如 `10 June 1819` → `June 10, 1819`），不是检索或逻辑退化——判读详见 `decisions/D6`、`D7`。
 
+当前代码已修复决策层的证据覆盖瓶颈：`multi` 路由先检索原问题，再补充子问题，以复用 KG 的原问题实体缓存。离线 50 题对照显示 full-hit 从旧决策路径的 0.24 恢复到 0.60；上表是修复前历史 run，模型端 EM/F1 需重新评测后更新。
+
 | 配置 | EM（严格） | EM（宽松\*\*） | F1 | 证据召回@10 | full-hit@10 | token/题 |
 |---|---|---|---|---|---|---|
 | naive（单轮固定检索） | 0.300 | 0.440 | 0.432 | 0.720 | 0.460 | 2,162 |
@@ -66,7 +68,7 @@ python scripts/ner_queries.py --benchmarks musique --variant samples    # 查询
 python scripts/eval_retrieval.py --benchmarks musique --variant samples --modes hybrid,kg,hybrid_kg
 # 端到端 QA（configs/ablation/ 下逐级消融开关）
 python scripts/eval_qa.py --benchmarks musique --variant samples \
-    --config configs/ablation/plus_full.yaml --limit 50
+    --config configs/ablation/plus_full_words.yaml --limit 50
 ```
 
 ### 作为 ResearchTool 被调用
@@ -84,8 +86,8 @@ out = tool.research(ResearchRequest(query="...", budget_tokens=4000, max_rounds=
 服务化（装配真实索引；`--check` 只体检不监听、不调模型）：
 
 ```bash
-python scripts/serve_api.py --config configs/ablation/plus_full.yaml --check   # 打印索引规模/版本
-python scripts/serve_api.py --port 8000    # POST /research · GET /runs/{trace_id} · GET /health
+python scripts/serve_api.py --config configs/ablation/plus_full_words.yaml --check   # 打印索引规模/版本
+python scripts/serve_api.py --config configs/ablation/plus_full_words.yaml --port 8000    # POST /research · GET /runs/{trace_id} · GET /health
 ```
 
 `failure` 是结构化失败信号：`no_evidence` / `budget_exhausted` / `upstream_error` / `timeout` / `invalid_request`；
@@ -122,7 +124,7 @@ docker compose up --build
 
 ```bash
 # 1. 后端（装配真实索引；--check 只体检）
-python scripts/serve_api.py --port 8000
+python scripts/serve_api.py --config configs/ablation/plus_full_words.yaml --port 8000
 
 # 2. 类型（后端改了契约就重新生成）
 python scripts/export_openapi.py

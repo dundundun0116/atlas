@@ -202,4 +202,5 @@ def test_token_budget_stops_decision_loop():
     result = agent.answer("q")
     assert result.stop_reason == StopReason.BUDGET_TOKENS.value
     assert result.rounds == 1                  # 第二轮开始前就被预算拦下
-    assert result.answer == "Paris"
+    assert result.answer == "unknown"          # 硬预算触顶后不再发答案调用
+    assert result.n_calls == 0

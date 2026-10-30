@@ -10,6 +10,7 @@
 import json
 import re
 from dataclasses import dataclass, field
+from typing import Callable
 
 ROUTE_DIRECT = "direct"
 ROUTE_SINGLE = "single"
@@ -70,11 +71,14 @@ def parse_plan_json(text: str) -> dict | None:
     return {"route": obj["route"], "subquestions": [s for s in subs if isinstance(s, str) and s.strip()]}
 
 
-def make_plan(llm, question: str, *, budgets: tuple = PLAN_BUDGETS, max_sub: int = 4) -> Plan:
+def make_plan(llm, question: str, *, budgets: tuple = PLAN_BUDGETS, max_sub: int = 4,
+              cancel_check: Callable[[], bool] | None = None) -> Plan:
     messages = [{"role": "system", "content": "You plan retrieval for multi-hop questions."},
                 {"role": "user", "content": PLAN_PROMPT.format(question=question)}]
     calls: list = []
     for n, budget in enumerate(budgets):
+        if cancel_check is not None and cancel_check():
+            break
         msgs = messages if n == 0 else messages + [{"role": "user", "content": PLAN_NUDGE}]
         resp = llm.chat(msgs, tag="plan" if n == 0 else "plan_retry", max_tokens=int(budget))
         calls.append(resp)

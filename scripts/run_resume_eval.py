@@ -21,14 +21,93 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 DEFAULT_CONFIGS = ("naive", "plus_rewrite", "plus_kg", "plus_decision", "plus_verify")
 
 
+def _result_rows(path: Path) -> list[dict] | None:
+    if not path.exists():
+        return None
+    rows: list[dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(row, dict) or not row.get("id"):
+            return None
+        rows.append(row)
+    return rows
+
+
+def _result_complete(target: Path, manifest: Path, expected_ids: set[str],
+                     *, benchmark: str, config_name: str, variant: str,
+                     expected_config: dict) -> bool:
+    """Skip only when rows and run identity exactly match this request."""
+    if not expected_ids:
+        return False
+    rows = _result_rows(target)
+    if rows is None:
+        return False
+    ids = [str(row["id"]) for row in rows]
+    if len(ids) != len(set(ids)) or set(ids) != expected_ids:
+        return False
+    if not manifest.exists():
+        return False
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    from compassrag.eval.manifest import sha1_ids
+
+    return (
+        data.get("benchmark") == benchmark
+        and data.get("config_name") == config_name
+        and data.get("corpus_variant") == variant
+        and int(data.get("n_questions", -1)) == len(expected_ids)
+        and data.get("sample_hash") == sha1_ids(expected_ids, prefix=f"{benchmark}:")
+        and data.get("config") == expected_config
+    )
+
+
+def _expected_ids(args) -> set[str]:
+    from compassrag.corpus.benchmarks import load_dev
+    from compassrag.corpus.sample import stratified_subset
+
+    raw_dir = Path(args.raw_dir)
+    sample_dir = Path(args.samples_dir)
+    records = load_dev(args.benchmark, raw_dir)
+    sample_file = sorted(sample_dir.glob(f"{args.benchmark}_dev_n*_seed*.jsonl"))[-1]
+    sample_ids = {
+        json.loads(line)["id"] for line in sample_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+    sampled = [record for record in records if record["id"] in sample_ids]
+    if args.limit:
+        sampled = stratified_subset(sampled, args.limit)
+    return {str(record["id"]) for record in sampled}
+
+
+def _expected_config(args, cfg: str) -> dict:
+    from compassrag.agent import AgentConfig
+
+    raw = yaml.safe_load((REPO_ROOT / "configs" / "ablation" / f"{cfg}.yaml").read_text())
+    config = AgentConfig(**raw["agent"])
+    config.use_graph = args.use_graph
+    if args.strict_answer_words:
+        config.strict_answer_words = args.strict_answer_words
+    return config.snapshot()
+
+
 def _run_one(cfg: str, args, repeat_dir: Path) -> Path:
-    out = repeat_dir / f"{args.benchmark}__{cfg}.jsonl"
+    suffix = "" if args.variant == "full_dev" else f"__{args.variant}"
+    out = repeat_dir / f"{args.benchmark}__{cfg}{suffix}.jsonl"
     cmd = [
         sys.executable, "-u", str(REPO_ROOT / "scripts" / "eval_qa.py"),
         "--benchmarks", args.benchmark, "--variant", args.variant,
@@ -103,6 +182,10 @@ def main() -> int:
     ap.add_argument("--report-only", action="store_true")
     ap.add_argument("--parallel", type=int, default=1,
                     help="同时跑几个配置（受内存与上游限流约束，建议 2–3）")
+    ap.add_argument("--raw-dir", default=REPO_ROOT / "data" / "raw")
+    ap.add_argument("--samples-dir", default=REPO_ROOT / "data" / "samples")
+    ap.add_argument("--no-graph", dest="use_graph", action="store_false")
+    ap.set_defaults(use_graph=True)
     args = ap.parse_args()
     configs = tuple(c.strip() for c in args.configs.split(",") if c.strip())
 
@@ -116,12 +199,18 @@ def main() -> int:
         return 0
 
     jobs: list[tuple[int, str, Path]] = []
+    expected_ids = _expected_ids(args) if not args.report_only else set()
     for r in range(1, args.repeats + 1):
         repeat_dir = root / f"r{r}"
         repeat_dir.mkdir(parents=True, exist_ok=True)
         for cfg in configs:
-            target = repeat_dir / f"{args.benchmark}__{cfg}.jsonl"
-            if target.exists() and target.stat().st_size > 0:
+            suffix = "" if args.variant == "full_dev" else f"__{args.variant}"
+            target = repeat_dir / f"{args.benchmark}__{cfg}{suffix}.jsonl"
+            manifest = repeat_dir / "manifests" / f"{args.benchmark}__{cfg}.json"
+            if _result_complete(target, manifest, expected_ids,
+                                benchmark=args.benchmark, config_name=cfg,
+                                variant=args.variant,
+                                expected_config=_expected_config(args, cfg)):
                 print(f"[r{r}] {cfg} 已有结果，跳过（续跑）")
                 continue
             jobs.append((r, cfg, repeat_dir))

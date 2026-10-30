@@ -98,6 +98,7 @@ def test_graph_matches_decision_early_stop():
               _suf(True), "1819"]
     a, b, ta, tb = _pair(script, cfg=AgentConfig(top_k=2, use_decision=True, max_rounds=3))
     _compare(a.answer("when was it made?"), run_graph(b, "when was it made?"))
+    assert ta.queries[0] == tb.queries[0] == "when was it made?"
 
 
 def test_graph_matches_decision_round_budget():
@@ -123,6 +124,38 @@ def test_graph_matches_empty_evidence_refusal():
     ra, rb = a.answer("q"), run_graph(b, "q")
     _compare(ra, rb)
     assert rb.answer == "unknown" and rb.stop_reason == "empty_evidence"
+
+
+def test_graph_budget_refuses_before_answer_call():
+    script = [_plan("multi", ["s1?"]), _suf(True), "should-not-run"]
+    a, b, _, _ = _pair(script, cfg=AgentConfig(top_k=2, use_decision=True,
+                                               max_total_tokens=20))
+    ra, rb = a.answer("q"), run_graph(b, "q")
+    assert ra.answer == rb.answer == "unknown"
+    assert ra.stop_reason == rb.stop_reason == "budget_exhausted:tokens"
+    assert ra.n_calls == rb.n_calls == 0
+
+
+def test_graph_cancellation_stops_before_verifier_call():
+    llm = ScriptLLM("Paris", _claims(("Paris", [1], True)))
+    agent = Agent(llm, {"bm25": FakeTool()}, STORE,
+                 AgentConfig(top_k=2, use_verifier=True))
+    result = agent.answer("q", cancel_check=lambda: len(llm.calls) >= 1)
+    assert result.stop_reason == "cancelled"
+    assert result.answer == ""
+    assert llm.calls == ["answer"]
+
+
+def test_graph_cancellation_stops_rewrite_ladder_before_hyde():
+    llm = ScriptLLM("- sub-question?")
+    tool = FakeTool()
+    agent = Agent(llm, {"bm25": tool}, STORE,
+                 AgentConfig(top_k=2, use_rewrite=True))
+    result = agent.answer("q", cancel_check=lambda: len(llm.calls) >= 1)
+    assert result.stop_reason == "cancelled"
+    assert result.answer == ""
+    assert llm.calls == ["decompose"]
+    assert tool.queries == []
 
 
 def test_graph_matches_verifier_repair_then_success():

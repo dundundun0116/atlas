@@ -3,7 +3,7 @@
 
 按 `configs/ablation/*.yaml` 的开关装载检索器，把 Agent 包成 FastAPI 应用：
 
-    python scripts/serve_api.py --config configs/ablation/plus_full.yaml --port 8000
+    python scripts/serve_api.py --config configs/ablation/plus_full_words.yaml --port 8000
     curl -s localhost:8000/health | jq
     curl -s -X POST localhost:8000/research -H 'content-type: application/json' \
          -d '{"query":"...","budget_tokens":4000}' | jq
@@ -51,7 +51,7 @@ def _check_manifest(manifest_dir: Path, args, n_chunks: int) -> None:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--config", default=REPO_ROOT / "configs" / "ablation" / "plus_full.yaml")
+    ap.add_argument("--config", default=REPO_ROOT / "configs" / "ablation" / "plus_full_words.yaml")
     ap.add_argument("--benchmark", default="musique")
     ap.add_argument("--variant", default="samples")
     ap.add_argument("--host", default="127.0.0.1")
@@ -75,9 +75,6 @@ def main():
 
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
     agent_cfg = AgentConfig(**cfg["agent"])
-    chunks_path = Path(args.corpus_dir) / f"{args.benchmark}__{args.variant}" / "chunks.jsonl"
-    if not chunks_path.exists():
-        raise SystemExit(f"语料不存在：{chunks_path}（先跑 scripts/build_corpus.py）")
     runtime_version = args.runtime_index_version
     if args.index_source == "ingest":
         from compassrag.api.ingest import IngestStore
@@ -90,6 +87,9 @@ def main():
         chunks = list(store.values())
         print(f"[ingest] 版本 {latest.version}：{len(chunks)} 块，工具 {list(tools)}（仅 BM25）")
     else:
+        chunks_path = Path(args.corpus_dir) / f"{args.benchmark}__{args.variant}" / "chunks.jsonl"
+        if not chunks_path.exists():
+            raise SystemExit(f"语料不存在：{chunks_path}（先跑 scripts/build_corpus.py）")
         chunks = [json.loads(l) for l in chunks_path.read_text(encoding="utf-8").splitlines() if l.strip()]
         store = {c["chunk_id"]: c for c in chunks}
 

@@ -74,7 +74,13 @@ def build_router(agent: Agent, *, store: TraceStore,
         trace = store.get(result.trace_id) or {}
         usage = trace.get("usage") or {}
         tokens = int(usage.get("prompt_tokens", 0)) + int(usage.get("completion_tokens", 0))
-        status = "cancelled" if result.stop_reason == "cancelled" else "completed"
+        if result.stop_reason == "cancelled" or result.failure == "cancelled":
+            status = "cancelled"
+        elif result.failure in {"timeout", "upstream_error", "invalid_request"} \
+                or result.stop_reason in {"timeout", "error"}:
+            status = "failed"
+        else:
+            status = "completed"
         registry.update(run_id, status=status, trace_id=result.trace_id,
                         answer=result.answer, stop_reason=result.stop_reason,
                         failure=result.failure, confidence=result.confidence,
@@ -186,16 +192,21 @@ def build_router(agent: Agent, *, store: TraceStore,
                     result = future.result(timeout=request.timeout_s)
                 except FutureTimeout:
                     future.cancel()
-                    result = ResearchResult(answer="", stop_reason="", trace_id="",
+                    result = ResearchResult(answer="", stop_reason="timeout", trace_id="",
                                             failure="timeout")
             else:
                 result = run()
             _record_result(run_id, result)
             return result
         except ValueError as exc:
+            registry.update(run_id, status="failed", failure="invalid_request",
+                            error=str(exc), finished_at=time.time())
             raise HTTPException(status_code=422,
                                 detail={"error": "invalid_request", "detail": str(exc)})
-        except Exception:  # noqa: BLE001 - 上游异常也要给结构化响应
+        except Exception as exc:  # noqa: BLE001 - 上游异常也要给结构化响应
+            registry.update(run_id, status="failed", failure="upstream_error",
+                            stop_reason="error", error=f"{type(exc).__name__}: {exc}",
+                            finished_at=time.time())
             return ResearchResult(answer="", failure="upstream_error",
                                   stop_reason="error", trace_id="")
 

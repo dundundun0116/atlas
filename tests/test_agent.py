@@ -176,8 +176,8 @@ def test_agentic_loop_plans_retrieves_early_stops_and_answers():
     result = agent.answer("When was the creator born?")
     assert result.answer == "1819"
     assert result.route == "multi" and result.rounds == 2
-    assert tool.queries == ["Who created it?", "Who created it exactly?"]
-    assert result.queries == ["Who created it?", "Who created it exactly?"]
+    assert tool.queries == ["When was the creator born?", "Who created it exactly?"]
+    assert result.queries == ["When was the creator born?", "Who created it exactly?"]
     assert [c["tag"] for c in llm.calls] == ["plan", "sufficiency", "sufficiency", "answer"]
     assert result.n_llm_calls == 4 and result.n_calls == 1
     assert result.prompt_tokens == 40  # 全部调用聚合（FakeLLM 每次 10 token × 4 次）

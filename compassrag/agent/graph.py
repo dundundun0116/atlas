@@ -96,20 +96,30 @@ class GraphRunner:
             return {"stop": StopReason.CANCELLED.value, "pending": []}
         if agent.config.use_decision:
             decision = agent._plan(st)
+            if st.check_cancel():
+                return {"decision": decision, "stop": StopReason.CANCELLED.value,
+                        "pending": []}
             st.route = decision.route
             if decision.route is Route.DIRECT:
                 return {"decision": decision, "pending": [],
                         "stop": StopReason.DIRECT.value}
             if decision.route is Route.MULTI and decision.subquestions:
-                pending = [{"query": q, "source": QuerySource.SUBQUESTION.value}
-                           for q in decision.subquestions]
+                # Preserve the original wording first so KG can use its cached NER
+                # result; subquestions then refine the evidence if budget remains.
+                pending = [{"query": st.question, "source": QuerySource.ORIGINAL.value}]
+                pending.extend({"query": q, "source": QuerySource.SUBQUESTION.value}
+                               for q in decision.subquestions if q != st.question)
             else:
                 pending = [{"query": st.question, "source": QuerySource.ORIGINAL.value}]
             return {"decision": decision, "pending": pending}
 
         st.route = Route.SINGLE
         if agent.config.use_rewrite:
-            variants = build_query_variants_sourced(agent.llm, st.question)
+            variants = build_query_variants_sourced(agent.llm, st.question,
+                                                    cancel_check=st.check_cancel)
+            if st.check_cancel():
+                return {"scripted": True, "stop": StopReason.CANCELLED.value,
+                        "pending": []}
         else:
             variants = [(st.question, QuerySource.ORIGINAL.value)]
         for query, source in variants:
@@ -118,6 +128,8 @@ class GraphRunner:
                 "pending": [{"query": q, "source": str(s)} for q, s in variants]}
 
     def _after_plan(self, gs: GraphState) -> str:
+        if gs.get("stop") == StopReason.CANCELLED.value or gs["st"].check_cancel():
+            return "prep"
         if gs.get("stop") == StopReason.DIRECT.value:
             return "prep"
         if gs.get("scripted"):
@@ -129,8 +141,12 @@ class GraphRunner:
     def _retrieve_all(self, gs: GraphState) -> dict[str, Any]:
         agent, st = self.agent, gs["st"]
         for item in gs["pending"]:
+            if st.check_cancel():
+                return {"pending": [], "stop": StopReason.CANCELLED.value}
             new = agent._retrieve_and_collect(st, item["query"], QuerySource(item["source"]))
             st.mark_new_evidence(item["query"], new)
+            if st.check_cancel():
+                return {"pending": [], "stop": StopReason.CANCELLED.value}
         st.rounds = 1
         return {"pending": [], "stop": StopReason.ANSWERED.value}
 
@@ -142,14 +158,21 @@ class GraphRunner:
         st.record_query(item["query"], QuerySource(item["source"]))
         new = agent._retrieve_and_collect(st, item["query"], QuerySource(item["source"]))
         st.mark_new_evidence(item["query"], new)
+        if st.check_cancel():
+            return {"stop": StopReason.CANCELLED.value, "pending": []}
         st.rounds += 1
         return {"pending": rest}
 
     def _verify(self, gs: GraphState) -> dict[str, Any]:
         agent, st = self.agent, gs["st"]
-        check = check_sufficiency(agent.llm, st.question, agent._format(st.evidence))
+        if st.check_cancel():
+            return {"stop": StopReason.CANCELLED.value, "pending": []}
+        check = check_sufficiency(agent.llm, st.question, agent._format(st.evidence),
+                                  cancel_check=st.check_cancel)
         for resp in check.calls:
             st.add_llm_call(resp)
+        if st.check_cancel():
+            return {"stop": StopReason.CANCELLED.value, "pending": []}
         result = EvidenceCheck(sufficient=check.ok, next_query=check.next_query,
                                parsed=check.parsed)
         st.step("verify", tag="sufficiency", detail={
@@ -185,12 +208,14 @@ class GraphRunner:
     def _prep(self, gs: GraphState) -> dict[str, Any]:
         agent, st = self.agent, gs["st"]
         if gs.get("stop") == StopReason.CANCELLED.value or st.check_cancel():
-            st.step("finish", tag="cancelled", detail={"reason": "client_cancelled"})
             return {"stop": StopReason.CANCELLED.value, "answer": "",
                     "calls": [], "refused": True}
         stop = StopReason(gs.get("stop") or StopReason.ANSWERED.value)
         stop = agent._finalize_stop(st, stop)
         st.truncate_evidence(agent.config.max_evidence)
+        if (budget_hit := st.budget_stop()) is not None:
+            return {"stop": budget_hit.value, "answer": "unknown", "calls": [],
+                    "refused": True}
         if agent.config.refuse_on_empty_evidence and not st.evidence:
             st.step("answer", detail={"refused": True, "reason": "no_evidence"})
             st.trace.n_answer_calls = 0
@@ -217,10 +242,19 @@ class GraphRunner:
         text = calls[-1].text.strip()
         merged_calls = list(gs.get("calls") or []) + calls
 
+        if st.check_cancel():
+            return {"answer": "", "calls": merged_calls,
+                    "stop": StopReason.CANCELLED.value, "repaired": True,
+                    "refused": True}
+
         if not agent.config.use_verifier:
             return {"answer": text, "calls": merged_calls, "repaired": True}
 
         verification = agent._verify(st, text)
+        if st.check_cancel():
+            return {"answer": "", "calls": merged_calls,
+                    "stop": StopReason.CANCELLED.value, "repaired": True,
+                    "refused": True}
         failures = agent._classify(st, verification, answer_empty=not text)
         st.trace.verification = verification
         st.trace.failures = list(failures)
@@ -255,6 +289,9 @@ class GraphRunner:
 
     def _repair(self, gs: GraphState) -> dict[str, Any]:
         agent, st = self.agent, gs["st"]
+        if st.check_cancel():
+            return {"stop": StopReason.CANCELLED.value, "answer": "", "repaired": True,
+                    "repair_query": ""}
         query = gs["repair_query"]
         st.repairs_used += 1
         st.trace.repairs.append(RepairAction(gs["repair_action"]))

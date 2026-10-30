@@ -25,6 +25,8 @@ class IndexStatus(BaseModel):
     n_chunks: int = 0
     n_versions: int = 0
     last_error: str = ""
+    available_tools: list[str] = Field(default_factory=list)
+    stage_status: dict[str, str] = Field(default_factory=dict)
 
 
 class DocumentUploadResult(BaseModel):
@@ -74,6 +76,10 @@ def build_ingest_router(store: IngestStore, *, runtime_version: str = "") -> API
             n_chunks=latest.n_chunks if latest else 0,
             n_versions=len(store.versions()),
             last_error=latest.error if latest else "",
+            available_tools=["bm25"] if latest and any(
+                s.name == "bm25" and s.status == "ok" for s in latest.stages
+            ) else [],
+            stage_status={s.name: s.status for s in (latest.stages if latest else [])},
         )
 
     return router

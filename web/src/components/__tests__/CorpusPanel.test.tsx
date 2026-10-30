@@ -11,6 +11,8 @@ const status = (over: Partial<IndexStatus> = {}): IndexStatus => ({
   n_chunks: 42,
   n_versions: 2,
   last_error: "",
+  available_tools: ["bm25"],
+  stage_status: { bm25: "ok", dense: "skipped" },
   ...over,
 }) as IndexStatus;
 

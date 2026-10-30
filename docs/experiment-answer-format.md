@@ -40,11 +40,11 @@
 
 - 已完成（不花钱）：`AgentConfig.strict_answer_words`（默认 0 = 提示词与历史**逐字节一致**，锚点不受影响）；
   `Agent._answer_prompt` 在开启时追加 "Answer with at most N words. No titles, no explanations, no parentheticals."
-- 未执行：跑数需要预算批准；`configs/ablation/plus_full_words.yaml` 待建（一行开关）。
+- 已完成：`configs/ablation/plus_full_words.yaml` 已建；服务默认使用该配置，`plus_full.yaml` 仍保留作历史无约束复现。
 
 ## 如果 H1 成立，后续
 
-1. 把词数约束设为决策行的默认值，重跑六配置表（约 280 万 token）；
+1. 用 `--strict-answer-words 5` 重跑六配置表（约 280 万 token），为正式结果补齐重复与波动区间；
 2. 严格 EM 与宽松 EM 的差距应缩到 <0.05，届时简历数字可以用更接近真实的严格 EM；
 3. 若 H2 成立，则说明"完整作答"其实暴露了模型的不确定——那应该改的是检索覆盖与核验，不是措辞。
 
@@ -65,6 +65,6 @@
 
 ## 下一步（需预算）
 
-1. 把 `strict_answer_words: 5` 写进决策类配置的默认，**重跑六配置**（约 280 万 token）——这样整张表的严格 EM 才反映真实水平，而不是被措辞压着。
+1. 评测脚本仍需完成第 2 次重复并生成 `summary.json`；服务默认已切到 `plus_full_words`，评测配置不自动改写以保持历史复现可控。
 2. C 臂（`plus_verify` + 词数上限）值得单独跑一次：若核验层在"不再啰嗦"的前提下也表现更好，它的定位（可信度 vs 效果）就要重写。
 3. 残余 3 题的格式噪声说明还值得做答案规范化（软匹配），但它属于**评测口径**工作，不该混进模型改动。

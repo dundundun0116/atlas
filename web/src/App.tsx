@@ -17,6 +17,7 @@ import {
   type RunSummary,
   type TraceEvent,
 } from "./api/client";
+import { appendEventUnique } from "./api/client";
 import { ResearchInput, type RunOptions } from "./components/ResearchInput";
 import { AnswerPanel } from "./components/AnswerPanel";
 import { EvidencePanel } from "./components/EvidencePanel";
@@ -89,21 +90,22 @@ export default function App() {
       try {
         const summary = await submitAsync({ query, ...options, async_mode: false } as any);
         setRunId(summary.run_id);
+        const refreshTerminal = () => {
+          getRun(summary.run_id)
+            .then((envelope) => {
+              setResult(envelope.result ?? null);
+              setRunning(false);
+              refreshRuns();
+            })
+            .catch((e) => setError(String(e)));
+        };
         closeRef.current = subscribeEvents(summary.run_id, (event) => {
           // 只把「轨迹步骤」放进时间线：status/finish 这类生命周期事件用于状态迁移，
           // 否则 finish 会出现两条（生命周期一条 + finish 节点一条）。
           const isStep = Boolean((event.payload as any)?.step_id);
-          setEvents((prev) => (isStep ? [...prev, event] : prev));
-          if (event.kind === "finish" || event.kind === "error") {
-            getRun(summary.run_id)
-              .then((envelope) => {
-                setResult(envelope.result ?? null);
-                setRunning(false);
-                refreshRuns();
-              })
-              .catch((e) => setError(String(e)));
-          }
-        });
+          setEvents((prev) => (isStep ? appendEventUnique(prev, event) : prev));
+          if (event.kind === "finish" || event.kind === "error") refreshTerminal();
+        }, refreshTerminal);
       } catch (e) {
         setError(String(e));
         setRunning(false);

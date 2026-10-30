@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from compassrag.agent import Agent, AgentConfig
 from compassrag.api import create_app
-from compassrag.api.ingest import IngestStore
+from compassrag.api.ingest import DocumentIn, IngestStore
 from compassrag.llm.client import LLMResponse
 
 
@@ -82,6 +82,17 @@ def test_build_creates_version_with_stages_and_files(tmp_path):
     root = tmp_path / "ingest" / "versions" / version["version"]
     assert (root / "chunks.jsonl").exists() and (root / "version.json").exists()
     assert (root / "bm25").exists()
+
+
+def test_requested_optional_ingest_stages_are_not_reported_as_built(tmp_path):
+    store = IngestStore(tmp_path / "ingest")
+    store.put_document(DocumentIn(name="a", content="hello"))
+    result = store.build(dense=True, entity_graph=True)
+    stages = {s.name: s for s in result.stages}
+    assert stages["dense"].status == "skipped"
+    assert stages["entity_graph"].status == "skipped"
+    assert "未实现" in stages["dense"].detail
+    assert "未实现" in stages["entity_graph"].detail
 
 
 def test_status_reports_runtime_version_mismatch(tmp_path):

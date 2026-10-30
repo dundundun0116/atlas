@@ -140,7 +140,7 @@ def test_plan_route_stats_uses_hop_as_weak_gold():
     from compassrag.eval.report import plan_route_stats
 
     rows = [
-        _row(stratum="1", route="single"),   # 对
+        _row(stratum="1", route="direct"),   # 对：1 跳允许 direct
         _row(stratum="2", route="multi"),    # 对
         _row(stratum="3", route="single"),   # 错
         _row(stratum="2", route=""),         # 无路由（scripted）→ 不进统计

@@ -189,14 +189,20 @@ class ToolRegistry:
         return self._specs.get(name)
 
     def run_all(self, request: SearchRequest, *,
-                names: list[str] | None = None) -> list[ToolCall]:
+                names: list[str] | None = None,
+                cancel_check: Callable[[], bool] | None = None) -> list[ToolCall]:
         """一条查询打所有工具（或指定子集）；**任何一个失败都不影响其他工具**。
 
         子集用于"切换检索视图"式修复：只走实体图或只走向量，而不是把三路全打一遍。
         """
         specs = ([self._specs[n] for n in names if n in self._specs]
                  if names else list(self._specs.values()))
-        return [spec.run(request) for spec in specs]
+        calls: list[ToolCall] = []
+        for spec in specs:
+            if cancel_check is not None and cancel_check():
+                break
+            calls.append(spec.run(request))
+        return calls
 
 
 def build_registry(tools: dict[str, Any], *, timeout_s: float = 0.0) -> ToolRegistry:

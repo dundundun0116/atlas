@@ -760,6 +760,20 @@
             "type": "string",
             "title": "Last Error",
             "default": ""
+          },
+          "available_tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Available Tools"
+          },
+          "stage_status": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Stage Status"
           }
         },
         "type": "object",
@@ -1081,6 +1095,11 @@
           "subtask_id": {
             "type": "string",
             "title": "Subtask Id",
+            "default": ""
+          },
+          "index_version": {
+            "type": "string",
+            "title": "Index Version",
             "default": ""
           },
           "status": {

@@ -13,6 +13,9 @@ Atlas 只应该看到"答案 + 哪几段原文支持它 + 为什么停 + 失败�
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
+import threading
 from typing import Any
 
 from .core import Agent, AgentResult
@@ -29,6 +32,7 @@ from .schemas import (
 QUOTE_CHARS_DEFAULT = 280
 ANSWERLESS = {"", "unknown", "none", "n/a", "i don't know", "not known"}
 EVIDENCE_LIMIT_DEFAULT = 5
+_CACHE_LOCK = threading.Lock()
 
 _FAILURE_BY_STOP: dict[StopReason, str] = {
     StopReason.EMPTY_EVIDENCE: "no_evidence",
@@ -146,9 +150,17 @@ def research(agent: Agent, request: ResearchRequest, *,
 
     `idempotency_key` 命中缓存时直接返回上一次结果（阶段 E 的幂等语义）。
     """
+    cache_key = ""
     if cache is not None and request.idempotency_key:
-        if request.idempotency_key in cache:
-            return cache[request.idempotency_key]
+        # Include request semantics in the lookup key so accidental key reuse
+        # cannot return a result for a different query or budget.
+        payload = request.model_dump(exclude={"idempotency_key"}, mode="json")
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+        cache_key = f"{request.idempotency_key}:{digest}"
+        with _CACHE_LOCK:
+            cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
 
     cfg = dataclasses.replace(
         agent.config,
@@ -163,6 +175,7 @@ def research(agent: Agent, request: ResearchRequest, *,
     if on_trace is not None and result.trace is not None:
         on_trace(result.trace)
     out = to_research_result(result, store=agent.store)
-    if cache is not None and request.idempotency_key:
-        cache[request.idempotency_key] = out
+    if cache is not None and cache_key:
+        with _CACHE_LOCK:
+            cache[cache_key] = out
     return out

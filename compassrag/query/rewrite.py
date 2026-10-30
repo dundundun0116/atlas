@@ -5,6 +5,8 @@
 变体缺失，绝不让整题失败。
 """
 
+from typing import Callable
+
 MAX_SUBQUESTIONS = 4
 
 REWRITE_NUDGE = "Output the result now. Do not analyze further."
@@ -50,9 +52,12 @@ def parse_subquestions(text: str) -> list[str]:
     return out
 
 
-def _chat_ladder(llm, messages, *, tag, budgets=(1024, 2048, 4096), accept):
+def _chat_ladder(llm, messages, *, tag, budgets=(1024, 2048, 4096), accept,
+                 cancel_check: Callable[[], bool] | None = None):
     """预算阶梯调用：accept(text) 通过即返回文本，否则带收尾提示升级预算重试。"""
     for n, budget in enumerate(budgets):
+        if cancel_check is not None and cancel_check():
+            return ""
         msgs = messages if n == 0 else messages + [{"role": "user", "content": REWRITE_NUDGE}]
         resp = llm.chat(msgs, tag=tag if n == 0 else f"{tag}_retry", max_tokens=int(budget))
         if accept(resp.text):
@@ -60,11 +65,13 @@ def _chat_ladder(llm, messages, *, tag, budgets=(1024, 2048, 4096), accept):
     return ""
 
 
-def decompose(llm, question: str, *, max_sub: int = MAX_SUBQUESTIONS) -> list[str]:
+def decompose(llm, question: str, *, max_sub: int = MAX_SUBQUESTIONS,
+              cancel_check: Callable[[], bool] | None = None) -> list[str]:
     """多跳分解：返回去重截断后的子问题列表（失败/无需分解时为 [question]）。"""
     text = _chat_ladder(llm, [{"role": "system", "content": "You decompose multi-hop questions."},
                               {"role": "user", "content": DECOMPOSE_PROMPT.format(question=question)}],
-                        tag="decompose", accept=lambda t: bool(parse_subquestions(t)))
+                        tag="decompose", accept=lambda t: bool(parse_subquestions(t)),
+                        cancel_check=cancel_check)
     subs: list[str] = []
     for q in parse_subquestions(text):
         if q.lower() != question.lower() and q not in subs:
@@ -72,11 +79,12 @@ def decompose(llm, question: str, *, max_sub: int = MAX_SUBQUESTIONS) -> list[st
     return subs[:max_sub] if subs else [question]
 
 
-def hyde(llm, question: str) -> str:
+def hyde(llm, question: str, *, cancel_check: Callable[[], bool] | None = None) -> str:
     """HyDE 假答案改写：返回一段假想答案段落（失败时为空串）。"""
     return _chat_ladder(llm, [{"role": "system", "content": "You write hypothetical encyclopedia passages."},
                               {"role": "user", "content": HYDE_PROMPT.format(question=question)}],
-                        tag="hyde", accept=lambda t: bool(t.strip())).strip()
+                        tag="hyde", accept=lambda t: bool(t.strip()),
+                        cancel_check=cancel_check).strip()
 
 
 SOURCE_ORIGINAL = "original"
@@ -85,7 +93,8 @@ SOURCE_HYDE = "hyde"
 
 
 def build_query_variants_sourced(llm, question: str,
-                                 *, max_sub: int = MAX_SUBQUESTIONS) -> list[tuple[str, str]]:
+                                 *, max_sub: int = MAX_SUBQUESTIONS,
+                                 cancel_check: Callable[[], bool] | None = None) -> list[tuple[str, str]]:
     """`build_query_variants` 的来源标注版：返回 [(查询, 来源)]。
 
     来源是轨迹的一部分——评测要能回答"这条查询为什么会存在"，否则 HyDE 与子问题
@@ -93,11 +102,11 @@ def build_query_variants_sourced(llm, question: str,
     """
     variants: list[tuple[str, str]] = [(question, SOURCE_ORIGINAL)]
     seen = {question}
-    for q in decompose(llm, question, max_sub=max_sub):
+    for q in decompose(llm, question, max_sub=max_sub, cancel_check=cancel_check):
         if q not in seen:
             seen.add(q)
             variants.append((q, SOURCE_SUBQUESTION))
-    h = hyde(llm, question)
+    h = hyde(llm, question, cancel_check=cancel_check)
     if h and h not in seen:
         seen.add(h)
         variants.append((h, SOURCE_HYDE))

@@ -408,6 +408,12 @@ export interface components {
              * @default
              */
             last_error: string;
+            /** Available Tools */
+            available_tools?: string[];
+            /** Stage Status */
+            stage_status?: {
+                [key: string]: string;
+            };
         };
         /** IndexVersion */
         IndexVersion: {
@@ -629,6 +635,11 @@ export interface components {
              * @default
              */
             subtask_id: string;
+            /**
+             * Index Version
+             * @default
+             */
+            index_version: string;
             /**
              * Status
              * @default queued

@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { TraceTimeline } from "../TraceTimeline";
-import type { TraceEvent } from "../../api/client";
+import { appendEventUnique, type TraceEvent } from "../../api/client";
 
 const ev = (seq: number, kind: string, payload: Record<string, unknown> = {}): TraceEvent =>
   ({ run_id: "r1", seq, kind, ts: 0, payload }) as TraceEvent;
@@ -28,5 +28,10 @@ describe("TraceTimeline", () => {
   it("没有事件时显示占位", () => {
     render(<TraceTimeline events={[]} />);
     expect(screen.getByText("还没有事件")).toBeInTheDocument();
+  });
+
+  it("重复 seq 事件只保留一条", () => {
+    const first = ev(1, "retrieve");
+    expect(appendEventUnique([first], { ...first })).toHaveLength(1);
   });
 });

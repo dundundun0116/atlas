@@ -33,4 +33,6 @@ class TraceStore:
         return None
 
     def __len__(self) -> int:
-        return len(self._mem)
+        if self.dir is None:
+            return len(self._mem)
+        return len(set(self._mem) | {p.stem for p in self.dir.glob("*.json")})

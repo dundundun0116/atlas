@@ -145,6 +145,9 @@ class AgentState:
                                 for t in tools)
             else:
                 tool = str(detail.get("tool", "") or "")
+            outcomes = [str(t.get("outcome", "ok")) for t in tools
+                        if isinstance(t, dict)] if isinstance(tools, list) else []
+            event_outcome = next((o for o in outcomes if o != "ok"), "ok")
             self.on_event({
                 "kind": kind,
                 "step_id": step.step_id,
@@ -152,7 +155,7 @@ class AgentState:
                 "tag": step.tag,
                 "tool": tool,
                 "query_source": str(detail.get("source", "") or ""),
-                "outcome": "error" if detail.get("outcome") == "error" else "ok",
+                "outcome": event_outcome,
                 "detail": detail,
                 "round": self.rounds,
                 "evidence": len(self.evidence),

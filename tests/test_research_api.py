@@ -127,6 +127,15 @@ def test_timeout_is_reported_structurally():
     assert r.json()["failure"] == "timeout"
 
 
+def test_sync_timeout_marks_run_failed(tmp_path):
+    client, _ = _client(tools={"bm25": SlowTool()}, trace_dir=tmp_path)
+    r = client.post("/research/sync", json={"query": "q", "timeout_s": 0.01})
+    assert r.json()["failure"] == "timeout"
+    runs = client.get("/runs").json()
+    assert runs[0]["status"] == "failed"
+    assert runs[0]["failure"] == "timeout"
+
+
 def test_budget_exhausted_is_branchable():
     import json as _json
     llm = ScriptLLM(script=[

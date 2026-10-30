@@ -7,6 +7,7 @@
 import json
 import re
 from dataclasses import dataclass, field
+from typing import Callable
 
 SUFFICIENCY_NUDGE = "Output the JSON now. Do not analyze further."
 SUFFICIENCY_BUDGETS = (1024, 2048, 4096)
@@ -53,12 +54,15 @@ def parse_sufficiency_json(text: str) -> dict | None:
 
 
 def check_sufficiency(llm, question: str, evidence_text: str,
-                      *, budgets: tuple = SUFFICIENCY_BUDGETS) -> Sufficiency:
+                      *, budgets: tuple = SUFFICIENCY_BUDGETS,
+                      cancel_check: Callable[[], bool] | None = None) -> Sufficiency:
     messages = [{"role": "system", "content": "You judge evidence sufficiency for question answering."},
                 {"role": "user", "content": SUFFICIENCY_PROMPT.format(question=question,
                                                                       evidence=evidence_text)}]
     calls: list = []
     for n, budget in enumerate(budgets):
+        if cancel_check is not None and cancel_check():
+            break
         msgs = messages if n == 0 else messages + [{"role": "user", "content": SUFFICIENCY_NUDGE}]
         resp = llm.chat(msgs, tag="sufficiency" if n == 0 else "sufficiency_retry",
                         max_tokens=int(budget))

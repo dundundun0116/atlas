@@ -144,6 +144,13 @@ export function subscribeEvents(
   return close;
 }
 
+export function appendEventUnique(events: TraceEvent[], event: TraceEvent): TraceEvent[] {
+  if (events.some((item) => item.run_id === event.run_id && item.seq === event.seq)) {
+    return events;
+  }
+  return [...events, event].sort((a, b) => a.seq - b.seq);
+}
+
 /** 事件 → 一句话摘要（时间线渲染用；纯函数便于测试）。 */
 export function describeEvent(event: TraceEvent): string {
   const payload = (event.payload ?? {}) as Record<string, unknown>;

@@ -71,10 +71,10 @@ def plan_route_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
     for r in rows:
         hop = _hop(r)
         route = str(r.get("route") or "").strip()
-        if hop is None or route not in ("single", "multi"):
+        if hop is None or route not in ("direct", "single", "multi"):
             continue
-        expected = "single" if hop <= 1 else "multi"
-        pairs.append((hop, route, route == expected))
+        expected = {"direct", "single"} if hop <= 1 else {"multi"}
+        pairs.append((hop, route, route in expected))
     if not pairs:
         return {"n": 0, "accuracy": None, "by_hop": {}}
     by_hop: dict[str, dict[str, Any]] = {}

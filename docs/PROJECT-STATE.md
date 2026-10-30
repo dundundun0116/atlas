@@ -77,7 +77,9 @@ LangGraph 控制流（agent/graph.py）  plan → retrieve* → verify → prep 
 | 3 React 工作台 | ✅ | 11 条组件测试；真实浏览器跑通（含 direct 与多轮两条路径） |
 | 4 文档与索引版本 | ✅ | 上传/去重/构建/版本固定/状态；6 条测试 |
 | 5 一条命令与部署 | ✅ | `scripts/demo.sh`（实测 200/200）、Dockerfile×2、compose（未实机构建）、架构文档 |
-| 6 正式评测与简历证据 | 🚧 | 脚本与口径文档已完成；**2 次重复的正式跑数进行中** |
+| 6 正式评测与简历证据 | 🚧 | 脚本与口径文档已完成；**第 2 次重复仍未完成，不能据此宣称有波动区间** |
+
+本轮质量修复：决策层的 `multi` 路由现在先检索原问题，再检索子问题。原问题是 KG 查询实体缓存的键；离线 50 题检索对照显示，BM25 + Dense + KG 的 full-hit 从旧决策路径的 0.24 恢复到原问题路径的 0.60。该结果只证明证据覆盖代理改善，尚未替代模型端 QA 重跑。
 
 ## 5. 评测：口径与数字
 
@@ -89,6 +91,7 @@ LangGraph 控制流（agent/graph.py）  plan → retrieve* → verify → prep 
   指纹不同的 run 不可直接比较。
 - `token/题` 会随模型行为漂移（重试率变化），**跨时间只比 EM/F1 与证据指标**。
 - 历史表与正式评测表分属两套目录（`runs/qa/` 与 `runs/eval/`），不可混算。
+- `runs/qa/` 中已有决策行数字是在原问题锚点修复前生成的；修复后的 EM/F1 需重新跑模型评测后才能更新。
 
 ### 5.2 历史基线（无答案词数约束，n=50，2026-10-28）
 
@@ -115,7 +118,7 @@ LangGraph 控制流（agent/graph.py）  plan → retrieve* → verify → prep 
 逐题 **7 好 0 坏**，残余格式损失 7→3 题，成本 557,165 token。判据预先写死在
 `compassrag/eval/arms.py`（严格 ≥ +0.08 且宽松不降 → H1）。结论：**那 0.14 是措辞问题，不是能力问题**。
 
-### 5.4 正式评测（加词数约束，2 次重复）
+### 5.4 正式评测（加词数约束，目标 2 次重复）
 
 **第 1 次重复（n=50，已完成）**：
 
@@ -155,7 +158,7 @@ LangGraph 控制流（agent/graph.py）  plan → retrieve* → verify → prep 
 | D8 | `use_graph` 默认 True，顺序实现保留作对照 |
 | D9 | plan accuracy 用「路由 vs 跳数」弱代理，不等于计划质量 |
 | D10 | 严格 EM 为主、宽松 EM 为诊断；否定结论先排除口径 |
-| D11 | 答案格式实验：H1 成立，词数约束应成为默认 |
+| D11 | 答案格式实验：H1 成立，服务默认使用 5 词约束；`plus_full.yaml` 保留作历史复现 |
 
 教训卡（`lessons/`）：清理了 6 条真实踩坑（空答案归因、包遮蔽模块、作废口径混入聚合、模型已缓存仍联网、Teredo IPv6 卡死、脚本函数定义位置）与 3 条机制经验。
 
@@ -174,8 +177,8 @@ LangGraph 控制流（agent/graph.py）  plan → retrieve* → verify → prep 
 ## 8. 复现命令
 
 ```bash
-.venv/bin/python -m pytest -q                                  # 后端 252 项，全部无需真实 API
-cd web && npm install && npm test && npm run build              # 前端 11 项 + 构建
+.venv/bin/python -m pytest -q                                  # 后端 261 项，全部无需真实 API
+cd web && npm install && npm test && npm run build              # 前端 12 项 + 构建
 
 python scripts/run_resume_eval.py --repeats 2 --parallel 3 --strict-answer-words 5   # 正式评测
 python scripts/report_runs.py                                   # 四列表

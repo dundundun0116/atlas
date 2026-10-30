@@ -176,6 +176,11 @@ class Agent:
             state.trace.n_answer_calls = 0
             calls: list = []
             text, stop = "unknown", StopReason.EMPTY_EVIDENCE
+        elif (budget_hit := state.budget_stop()) is not None:
+            state.step("answer", detail={"refused": True, "reason": budget_hit.value})
+            state.trace.n_answer_calls = 0
+            calls = []
+            text, stop = "unknown", budget_hit
         else:
             text, calls, stop = self._answer_and_verify(state, route, stop)
 
@@ -222,10 +227,14 @@ class Agent:
 
     def _control_flow(self, state: AgentState) -> tuple[Route, StopReason]:
         """plan / retrieve / verify 的控制流；scripted 与 decision 只差开关。"""
+        if state.check_cancel():
+            return Route.SINGLE, StopReason.CANCELLED
         if self.config.use_decision:
             decision = self._plan(state)
             if decision.route is Route.DIRECT:
                 return decision.route, StopReason.DIRECT
+            if state.check_cancel():
+                return decision.route, StopReason.CANCELLED
             return decision.route, self._decide_loop(state, decision)
         return Route.SINGLE, self._scripted_round(state)
 
@@ -240,10 +249,17 @@ class Agent:
             state.add_llm_call(resp)
         state.trace.n_answer_calls = len(calls)
         text = calls[-1].text.strip()
+        if state.check_cancel():
+            return "", calls, StopReason.CANCELLED
         if not self.config.use_verifier:
             return text, calls, stop
 
+        if state.check_cancel():
+            return "", calls, StopReason.CANCELLED
+
         verification = self._verify(state, text)
+        if state.check_cancel():
+            return "", calls, StopReason.CANCELLED
         failures = self._classify(state, verification, answer_empty=not text)
         state.trace.verification = verification
         state.trace.failures = list(failures)
@@ -267,6 +283,8 @@ class Agent:
             return "unknown", calls, StopReason.INSUFFICIENT_EVIDENCE
         state.repairs_used += 1
         state.trace.repairs.append(action)
+        if state.check_cancel():
+            return "", calls, StopReason.CANCELLED
         state.record_query(query, QuerySource.REPAIR)
         views = self.repair_views(action)
         state.mark_new_evidence(query, self._retrieve_and_collect(
@@ -278,7 +296,11 @@ class Agent:
             state.add_llm_call(resp)
         state.trace.n_answer_calls += len(retry_calls)
         text2 = retry_calls[-1].text.strip()
+        if state.check_cancel():
+            return "", calls + retry_calls, StopReason.CANCELLED
         verification2 = self._verify(state, text2)
+        if state.check_cancel():
+            return "", calls + retry_calls, StopReason.CANCELLED
         failures2 = self._classify(state, verification2, answer_empty=not text2)
         state.trace.verification = verification2
         state.trace.failures = list(failures2)
@@ -292,7 +314,8 @@ class Agent:
     def _verify(self, state: AgentState, answer: str):
         evidence = [(cid, f"{self.store[cid]['title']}: {self.store[cid]['text']}")
                     for cid in state.evidence if cid in self.store]
-        result, calls = verify_answer(self.llm, state.question, answer, evidence)
+        result, calls = verify_answer(self.llm, state.question, answer, evidence,
+                                      cancel_check=state.check_cancel)
         for resp in calls:
             state.add_llm_call(resp)
         state.step("verify", tag="verify", detail={
@@ -331,9 +354,14 @@ class Agent:
 
     def _plan(self, state: AgentState) -> RouteDecision:
         """调 planner，并把它的输出**立刻收进 schema**——控制流只认 schema。"""
-        plan = make_plan(self.llm, state.question)
+        if state.check_cancel():
+            return RouteDecision(route=Route.SINGLE)
+        plan = make_plan(self.llm, state.question, cancel_check=state.check_cancel)
         for resp in plan.calls:
             state.add_llm_call(resp)
+        if state.check_cancel():
+            state.step("plan", tag="cancelled", detail={"reason": "client_cancelled"})
+            return RouteDecision(route=Route.SINGLE)
         decision = RouteDecision(route=Route(plan.route),
                                  subquestions=list(plan.subquestions),
                                  parsed=plan.parsed,
@@ -351,11 +379,18 @@ class Agent:
     # ------------------------------------------------------------------ #
 
     def _scripted_round(self, state: AgentState) -> StopReason:
-        variants = build_query_variants_sourced(self.llm, state.question) \
+        if state.check_cancel():
+            return StopReason.CANCELLED
+        variants = build_query_variants_sourced(self.llm, state.question,
+                                                cancel_check=state.check_cancel) \
             if self.config.use_rewrite else [(state.question, QuerySource.ORIGINAL)]
+        if state.check_cancel():
+            return StopReason.CANCELLED
         for query, source in variants:
             state.record_query(query, QuerySource(source))
         for query, source in variants:
+            if state.check_cancel():
+                return StopReason.CANCELLED
             new = self._retrieve_and_collect(state, query, source)
             state.mark_new_evidence(query, new)
         state.rounds = 1
@@ -367,8 +402,12 @@ class Agent:
 
     def _decide_loop(self, state: AgentState, decision: RouteDecision) -> StopReason:
         if decision.route is Route.MULTI and decision.subquestions:
-            pending: list[tuple[str, QuerySource]] = [
-                (q, QuerySource.SUBQUESTION) for q in decision.subquestions]
+            # Keep the original question as the first retrieval anchor. The KG query
+            # entity cache is keyed by the original wording; subquestions otherwise
+            # fall back to weaker embedding-only seed selection and lose coverage.
+            pending = [(state.question, QuerySource.ORIGINAL)]
+            pending.extend((q, QuerySource.SUBQUESTION)
+                           for q in decision.subquestions if q != state.question)
         else:
             pending = [(state.question, QuerySource.ORIGINAL)]
 
@@ -376,6 +415,8 @@ class Agent:
         for _ in range(max(1, self.config.max_rounds)):
             if not pending:
                 break
+            if state.check_cancel():
+                return StopReason.CANCELLED
             if (hit := state.budget_stop()) is not None:
                 stop = hit
                 break
@@ -385,9 +426,12 @@ class Agent:
             state.mark_new_evidence(query, new)
             state.rounds += 1
 
-            check = check_sufficiency(self.llm, state.question, self._format(state.evidence))
+            check = check_sufficiency(self.llm, state.question, self._format(state.evidence),
+                                      cancel_check=state.check_cancel)
             for resp in check.calls:
                 state.add_llm_call(resp)
+            if state.check_cancel():
+                return StopReason.CANCELLED
             evidence_check = EvidenceCheck(sufficient=check.ok, next_query=check.next_query,
                                            parsed=check.parsed)
             state.step("verify", tag="sufficiency", detail={
@@ -400,6 +444,8 @@ class Agent:
             if evidence_check.sufficient:
                 stop = StopReason.EARLY_STOP
                 break
+            if state.check_cancel():
+                return StopReason.CANCELLED
             if (hit := state.budget_stop()) is not None:
                 stop = hit
                 break
@@ -423,8 +469,10 @@ class Agent:
                              source: QuerySource, *,
                              only: list[str] | None = None) -> int:
         """一条查询 × 全部工具 → RRF → 近重合并 → 去重累积；返回新增证据数。"""
+        if state.check_cancel():
+            return 0
         request = SearchRequest(query=query, top_k=self.config.top_k)
-        calls = self.registry.run_all(request, names=only)
+        calls = self.registry.run_all(request, names=only, cancel_check=state.check_cancel)
         for call in calls:
             state.add_tool_call(call)
         state.step("retrieve", detail={
@@ -432,6 +480,8 @@ class Agent:
             "tools": [{"tool": c.tool_name, "outcome": c.outcome, "hits": len(c.hits)}
                       for c in calls],
         })
+        if state.check_cancel():
+            return 0
         routes = [c.chunk_ids for c in calls if c.ok]
         # 近重合并只在 use_rewrite 且 dense 工具**真的带向量**时启用（与第 1 代语义一致）
         dense_spec = self.registry.get("dense")
@@ -461,6 +511,8 @@ class Agent:
         resp = self.llm.chat(messages, tag="answer", max_tokens=self.config.answer_max_tokens)
         calls = [resp]
         for budget in self.config.answer_retry_budgets:
+            if state.check_cancel():
+                break
             if resp.text.strip():
                 break
             resp = self.llm.chat(messages + [{"role": "user", "content": RETRY_NUDGE}],

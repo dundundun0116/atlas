@@ -143,7 +143,15 @@ def test_idempotency_key_returns_same_trace():
     first = research(agent, req, cache=cache)
     second = research(agent, req, cache=cache)
     assert first.trace_id == second.trace_id
-    assert agent.llm.calls == 1               # 第二次没有再跑模型
+    assert agent.llm.calls == 1
+
+
+def test_idempotency_key_reuse_with_different_query_does_not_return_old_result():
+    agent = _agent()
+    cache: dict = {}
+    first = research(agent, ResearchRequest(query="q1", idempotency_key="same"), cache=cache)
+    second = research(agent, ResearchRequest(query="q2", idempotency_key="same"), cache=cache)
+    assert first.trace_id != second.trace_id
 
 
 def test_different_keys_do_not_collide():
