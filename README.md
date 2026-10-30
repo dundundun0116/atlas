@@ -1,3 +1,7 @@
+> **本仓库已归档**：CompassRAG 已合并进 [dundundun0116/atlas](https://github.com/dundundun0116/atlas)，
+> 作为该项目的检索层（`compassrag/` 包）继续维护。完整 Git 历史保留在 atlas 的
+> `compassrag-history` 分支；本仓库只读保留，不再接受提交。
+
 # CompassRAG
 
 > Adaptive Retrieval Decisions over Structured Indexes for Multi-Hop QA
