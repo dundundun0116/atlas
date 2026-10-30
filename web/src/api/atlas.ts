@@ -53,6 +53,42 @@ export async function getAtlasTask(sessionId: string): Promise<AtlasTask> {
   return json<AtlasTask>(await fetch(`${BASE}/tasks/${encodeURIComponent(sessionId)}`));
 }
 
+export interface AtlasEvidence {
+  source?: string;
+  chunk_id?: string;
+  quote?: string;
+  retriever?: string;
+  rank?: number;
+}
+
+export interface ResearchCallResult {
+  session_id: string;
+  fact_id: string;
+  answer: string;
+  evidence: AtlasEvidence[];
+  confidence: number;
+  stop_reason: string;
+  trace_id: string;
+  failure_kind: string;
+  failure_message: string;
+}
+
+export async function runAtlasResearch(
+  sessionId: string,
+  query: string,
+): Promise<ResearchCallResult> {
+  const res = await fetch(`${BASE}/tasks/${encodeURIComponent(sessionId)}/research`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      query,
+      request_id: `req-${Date.now()}`,
+      idempotency_key: `research-${sessionId}-${Date.now()}`,
+    }),
+  });
+  return json<ResearchCallResult>(res);
+}
+
 export interface CreateTaskPayload {
   session_id: string;
   goal: string;

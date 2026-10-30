@@ -56,6 +56,8 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--demo", action="store_true", help="建一个演示任务")
+    parser.add_argument("--compassrag-url", default="",
+                        help="CompassRAG 服务地址；配置后工作台可对任务发起检索")
     args = parser.parse_args()
 
     os.makedirs(os.path.dirname(args.db) or ".", exist_ok=True)
@@ -63,7 +65,15 @@ def main() -> None:
     repository = GraphRepository(database)
     if args.demo:
         seed_demo(repository)
-    app = create_app(repository)
+    research_tool = None
+    if args.compassrag_url:
+        from atlas.tools import HttpCompassRAGTool
+
+        research_tool = HttpCompassRAGTool(args.compassrag_url)
+        print(f"[atlas-api] ResearchTool 已启用：{args.compassrag_url}")
+    else:
+        print("[atlas-api] 未配置 --compassrag-url：/research 端点返回 unrecoverable（工作台可看不可发起检索）")
+    app = create_app(repository, research_tool=research_tool)
     uvicorn.run(app, host=args.host, port=args.port)
 
 

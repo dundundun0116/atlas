@@ -6,23 +6,18 @@ import {
   getAtlasTask,
   pauseAtlasTask,
   resumeAtlasTask,
-  type AtlasReport,
+  runAtlasResearch,
+  type AtlasEvidence,
   type AtlasNode,
+  type AtlasReport,
   type AtlasTask,
+  type ResearchCallResult,
 } from "./api/atlas";
 
 const DEFAULT_SESSION =
   new URLSearchParams(window.location.search).get("session") ?? "demo";
 
-interface EvidenceItem {
-  source?: string;
-  chunk_id?: string;
-  quote?: string;
-  retriever?: string;
-  rank?: number;
-}
-
-function parseEvidence(raw: string): EvidenceItem[] {
+function parseEvidence(raw: string): AtlasEvidence[] {
   try {
     const items = JSON.parse(raw || "[]");
     return Array.isArray(items) ? items : [];
@@ -40,7 +35,7 @@ const TRIGGER_LABELS: Record<string, string> = {
   pause: "暂停",
 };
 
-function evidenceLabel(item: EvidenceItem): string {
+function evidenceLabel(item: AtlasEvidence): string {
   const source = item.source || item.chunk_id || "未知来源";
   const retriever = item.retriever ? ` · ${item.retriever}` : "";
   const rank = item.rank ? ` #${item.rank}` : "";
@@ -69,6 +64,9 @@ function EvidenceList({ node }: { node: AtlasNode }) {
 export default function AtlasPage() {
   const [sessionId, setSessionId] = useState(DEFAULT_SESSION);
   const [goal, setGoal] = useState("回答：爱因斯坦出生于哪一年？");
+  const [researchQuery, setResearchQuery] = useState("爱因斯坦出生于哪一年？");
+  const [research, setResearch] = useState<ResearchCallResult | null>(null);
+  const [researching, setResearching] = useState(false);
   const [task, setTask] = useState<AtlasTask | null>(null);
   const [report, setReport] = useState<AtlasReport | null>(null);
   const [loading, setLoading] = useState(false);
@@ -109,6 +107,22 @@ export default function AtlasPage() {
     },
     [load, sessionId],
   );
+
+  const doResearch = useCallback(async () => {
+    const query = researchQuery.trim();
+    if (!query) return;
+    setResearching(true);
+    setError(null);
+    try {
+      const result = await runAtlasResearch(sessionId, query);
+      setResearch(result);
+      if (result.fact_id) await load(sessionId);   // 成功写 Fact：刷新节点与证据
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setResearching(false);
+    }
+  }, [load, researchQuery, sessionId]);
 
   const create = useCallback(async () => {
     const target = sessionId.trim();
@@ -206,6 +220,52 @@ export default function AtlasPage() {
                 </button>
               )}
             </div>
+          </section>
+
+          <section className="panel">
+            <h2>发起检索（Atlas → ResearchTool）</h2>
+            <div className="controls">
+              <label htmlFor="research-query">研究问题</label>
+              <input
+                id="research-query"
+                value={researchQuery}
+                onChange={(event) => setResearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") doResearch();
+                }}
+              />
+              <button onClick={doResearch} disabled={researching || loading}>
+                {researching ? "检索中…" : "发起检索"}
+              </button>
+            </div>
+            {research && (
+              <div className="atlas-research-result">
+                {research.failure_kind ? (
+                  <p className="error">
+                    检索失败：{research.failure_kind} {research.failure_message}
+                    {research.trace_id ? `（trace ${research.trace_id}）` : ""}
+                  </p>
+                ) : (
+                  <>
+                    <p className="question">{research.answer}</p>
+                    <p className="small">
+                      confidence {research.confidence.toFixed(2)} ·{" "}
+                      {research.stop_reason || "unknown"} · trace{" "}
+                      <code>{research.trace_id}</code>
+                      {research.fact_id ? ` · Fact ${research.fact_id}` : ""}
+                    </p>
+                    <ul className="atlas-evidence">
+                      {research.evidence.map((item, index) => (
+                        <li key={index}>
+                          <strong>{evidenceLabel(item)}</strong>
+                          {item.quote ? ` — ${item.quote}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </div>
+            )}
           </section>
 
           <section className="panel">

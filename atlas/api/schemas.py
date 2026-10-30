@@ -65,6 +65,27 @@ class NoteRequest(RequestMeta):
     confidence: float = 0.0
 
 
+class ResearchCallRequest(RequestMeta):
+    """对当前任务发起一次研究检索（Atlas 侧只负责调用 ResearchTool 并写 Fact）。"""
+
+    query: str = Field(min_length=1)
+    subtask_id: str = "S1"
+    budget_tokens: int = Field(default=4000, ge=1)
+    max_rounds: int = Field(default=2, ge=1)
+
+
+class ResearchCallView(BaseModel):
+    session_id: str
+    fact_id: str = ""
+    answer: str = ""
+    evidence: List[Dict[str, Any]] = Field(default_factory=list)
+    confidence: float = 0.0
+    stop_reason: str = ""
+    trace_id: str = ""
+    failure_kind: str = ""
+    failure_message: str = ""
+
+
 class NodeView(BaseModel):
     id: str
     type: str

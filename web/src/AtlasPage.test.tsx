@@ -47,6 +47,15 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (init?.method === "POST") {
+      if (String(url).includes("/research")) {
+        return respond({
+          session_id: "demo", fact_id: "F2", answer: "1879 年出生（API）",
+          evidence: [{ source: "Albert Einstein", chunk_id: "c2", quote: "出生于乌尔姆。",
+                       retriever: "kg", rank: 2 }],
+          confidence: 0.75, stop_reason: "answered", trace_id: "compass-trace-1",
+          failure_kind: "", failure_message: "",
+        });
+      }
       return respond({ session_id: "session-42", state: "planning", request_id: "r", replayed: false });
     }
     return String(url).includes("/report") ? respond(REPORT) : respond(TASK);
@@ -94,6 +103,16 @@ describe("AtlasPage", () => {
       const body = JSON.parse(String((advances[0][1] as RequestInit).body));
       expect(body.trigger).toBe("work_done");
     });
+  });
+
+  it("点击发起检索显示答案/证据并刷新任务", async () => {
+    render(<AtlasPage />);
+    await screen.findByText(/爱因斯坦出生于哪一年/);
+    fireEvent.click(screen.getByRole("button", { name: "发起检索" }));
+    expect(await screen.findByText("1879 年出生（API）")).toBeInTheDocument();
+    expect(screen.getByText(/compass-trace-1/)).toBeInTheDocument();
+    const calls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(calls.some((url) => url.includes("/atlas-api/tasks/demo/research"))).toBe(true);
   });
 
   it("创建任务后自动加载该会话", async () => {
