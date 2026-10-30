@@ -195,12 +195,18 @@ class AgentRuntime:
             "session_id": session_id,
             "goal": row.goal if row is not None else "",
             "state": view["state"],
+            "failure_reason": (
+                runtime.machine.failure_reason if runtime.machine is not None else ""
+            ),
             "nodes": [
                 {
                     "id": n.id, "type": n.type.value, "status": n.status.value,
                     "content": n.content, "actor": n.actor, "source": n.source,
                     "confidence": n.confidence, "valid_until": n.valid_until,
                     "verified_at": n.verified_at,
+                    "reason": getattr(n, "reason", ""),
+                    "evidence": getattr(n, "evidence", ""),
+                    "meta": getattr(n, "meta", {}) or {},
                 }
                 for n in sorted(engine.nodes.values(), key=lambda n: n.id)
             ],

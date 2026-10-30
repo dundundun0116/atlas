@@ -75,6 +75,9 @@ class NodeView(BaseModel):
     confidence: float = 0.0
     valid_until: str = ""
     verified_at: str = ""
+    reason: str = ""
+    evidence: str = ""
+    meta: Dict[str, Any] = Field(default_factory=dict)
 
 
 class EdgeView(BaseModel):
@@ -96,6 +99,7 @@ class TaskStateView(BaseModel):
     session_id: str
     goal: str
     state: str
+    failure_reason: str = ""
     nodes: List[NodeView] = Field(default_factory=list)
     edges: List[EdgeView] = Field(default_factory=list)
     checkpoint: Optional[CheckpointView] = None

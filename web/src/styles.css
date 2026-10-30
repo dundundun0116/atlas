@@ -67,3 +67,7 @@ blockquote { margin: 4px 0 12px; padding-left: 10px; border-left: 2px solid var(
   text-align: left; padding: 6px 8px; border-bottom: 1px solid #8883; vertical-align: top;
 }
 .atlas-report { white-space: pre-wrap; font-size: 13px; margin: 0; }
+
+.atlas-create { margin-top: 10px; }
+.atlas-evidence { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; }
+.atlas-evidence li { margin-bottom: 2px; }

@@ -139,8 +139,12 @@ class TestStateTraceReplay:
         runtime.advance_task("s1", "plan_ready")
         repo.add_node("s1", type_="fact", content="主引理", source="paper:1", confidence=0.9)
         state = runtime.get_state("s1")
-        assert {"session_id", "goal", "state", "nodes", "edges", "checkpoint", "provenance"} == set(state)
+        assert {"session_id", "goal", "state", "failure_reason", "nodes", "edges",
+                "checkpoint", "provenance"} == set(state)
         assert state["nodes"][0]["source"] == "paper:1"
+        # 证据/理由/meta 对 API 可见：统一工作台不读库也能展示依据
+        assert {"reason", "evidence", "meta"} <= set(state["nodes"][0])
+        assert state["failure_reason"] == ""
         assert state["checkpoint"]["pending_role"] == "worker"
 
     def test_trace_summary_counts_events(self, runtime):

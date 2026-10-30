@@ -80,7 +80,7 @@ python -m atlas.cli report <session_id> --db <SQLite 路径> \
 
 # 9) 全部测试
 pytest -q                      # 后端 573 项
-cd web && npm test             # 前端 14 项
+cd web && npm test             # 前端 15 项
 ```
 
 CompassRAG 的检索侧可以单独使用与评测（真实索引需要先按 [docs/compassrag/README.md](docs/compassrag/README.md) 构建语料/索引，并配置 `.env`）：
@@ -148,7 +148,7 @@ atlas/
 - [ ] 真实模型端到端评测（固定任务集、预算、重复次数）——效果数字的前提
 - [ ] 角色消融（Planner / Worker / Auditor 各自贡献拆分）
 - [x] 统一任务报告（静态 HTML：状态 / 角色 / 证据 / CompassRAG trace 下钻）
-- [x] 统一工作台：Vite `/atlas` 只读页（任务状态 / 角色步骤 / 图节点 / 报告）
+- [x] 统一工作台：Vite `/atlas` 页（创建任务 / 状态 / 角色步骤 / 图节点 / 证据 / 报告）
 
 ## License
 

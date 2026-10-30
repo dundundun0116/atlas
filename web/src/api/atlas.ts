@@ -18,12 +18,16 @@ export interface AtlasNode {
   confidence: number;
   valid_until: string;
   verified_at: string;
+  reason: string;
+  evidence: string;
+  meta: Record<string, unknown>;
 }
 
 export interface AtlasTask {
   session_id: string;
   goal: string;
   state: string;
+  failure_reason: string;
   nodes: AtlasNode[];
   edges: { src: string; dst: string; type: string }[];
   checkpoint: Record<string, unknown> | null;
@@ -46,6 +50,22 @@ async function json<T>(res: Response): Promise<T> {
 
 export async function getAtlasTask(sessionId: string): Promise<AtlasTask> {
   return json<AtlasTask>(await fetch(`${BASE}/tasks/${encodeURIComponent(sessionId)}`));
+}
+
+export interface CreateTaskPayload {
+  session_id: string;
+  goal: string;
+  request_id?: string;
+  idempotency_key?: string;
+}
+
+export async function createAtlasTask(payload: CreateTaskPayload): Promise<{ session_id: string; state: string }> {
+  const res = await fetch(`${BASE}/tasks`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return json<{ session_id: string; state: string }>(res);
 }
 
 export async function getAtlasReport(sessionId: string): Promise<AtlasReport> {
