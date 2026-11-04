@@ -249,7 +249,8 @@ class ResearchStepExecutor:
             return StepOutcome(
                 status="failed" if blocked == "violated" else "needs_human",
                 output={"target": target, "applied_ok": False, "compensated": False,
-                        "precheck": precheck},
+                        "precheck": precheck,
+                        "env_changes": list(precheck.get("changes") or [])},
                 error={"kind": f"precondition_{blocked}",
                        "message": precheck.get("reason", "")},
             )
@@ -343,14 +344,22 @@ class ResearchStepExecutor:
             if result.passed is not True:
                 failures.append({"condition": condition.to_dict(),
                                  "result": result.to_dict()})
+        observed_fp = snapshot.get(target).fingerprint if snapshot.get(target) else ""
         if not failures:
             return {"passed": True, "reason": "前置条件满足",
-                    "observed_fingerprint": snapshot.get(target).fingerprint
-                    if snapshot.get(target) else ""}
+                    "observed_fingerprint": observed_fp}
         passed = False if any(item["result"]["passed"] is False for item in failures) \
             else None
+        # 记录"世界变成了什么样"：重规划要能解释触发信号
+        changes = [{
+            "target": target,
+            "kind": "updated" if observed is not None else "created",
+            "before": failures[0]["condition"].get("fingerprint") or "",
+            "after": observed_fp,
+        }]
         return {"passed": passed, "failures": failures,
-                "reason": failures[0]["result"]["reason"]}
+                "reason": failures[0]["result"]["reason"],
+                "observed_fingerprint": observed_fp, "changes": changes}
 
     def _do_confirm(self, step, inputs: Dict[str, Any], scope: Dict[str, Any] = None) -> StepOutcome:
         """读回目标对象：确认外部世界真的变了，而不是相信 write 的返回值。"""

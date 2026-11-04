@@ -53,6 +53,8 @@ class RunReport:
     needs_human: List[str] = field(default_factory=list)
     failed: List[str] = field(default_factory=list)
     recovered_in_flight: List[str] = field(default_factory=list)
+    #: 这一轮发生的局部重规划（可解释记录）
+    revisions: List[Dict[str, Any]] = field(default_factory=list)
     stopped_reason: str = ""
     ticks: int = 0
 
@@ -68,6 +70,7 @@ class RunReport:
             "needs_human": list(self.needs_human),
             "failed": list(self.failed),
             "recovered_in_flight": list(self.recovered_in_flight),
+            "revisions": list(self.revisions),
             "stopped_reason": self.stopped_reason,
             "ticks": self.ticks,
             "complete": self.complete,
@@ -214,6 +217,11 @@ class PlanRunner:
             self.session_id, self.plan_id, step_id, target.value,
             reason=str(verification.get("reason", target.value)), actor=self.actor,
         )
+        # 外部世界在派发前就变了（前置条件不满足）：这不是"这步没做成"这么简单——
+        # 依赖它的已完成下游也建立在旧世界上，必须一起失效，并留下可解释记录。
+        if str((outcome.error or {}).get("kind") or "") == "precondition_violated":
+            self._record_replan(step_id, outcome, report)
+
         if target is StepStatus.DONE:
             report.needs_human = [item for item in report.needs_human if item != step_id]
         elif target is StepStatus.NEEDS_HUMAN:
@@ -225,6 +233,37 @@ class PlanRunner:
             self.session_id, self.plan_id, attempt["attempt_id"],
             verification=verification,
         )
+
+    def _record_replan(self, step_id: str, outcome: StepOutcome,
+                       report: RunReport) -> None:
+        """环境变化触发的局部重规划：算闭包 → 打 stale → 落一条 revision。"""
+        from atlas.planning.replan import decide_replan
+
+        detail = self._load_plan()
+        statuses = self.repository.step_statuses(self.session_id, self.plan_id)
+        changes = list((outcome.output or {}).get("env_changes") or [])
+        decision = decide_replan(
+            detail, statuses, [step_id], trigger="environment_changed",
+            changes=changes,
+            reason=str((outcome.error or {}).get("message") or "外部环境发生变化"),
+        )
+        if not decision.affected_steps:
+            return
+        if decision.stale_steps:
+            marked = self.repository.mark_downstream_stale(
+                self.session_id, self.plan_id, [step_id],
+                reason=decision.summary(),
+            )
+            decision.stale_steps = list(marked)
+        record = self.repository.save_plan_revision(
+            self.session_id, self.plan_id, decision, actor=self.actor)
+        report.revisions.append(record)
+
+    def _load_plan(self) -> PlanSpec:
+        from atlas.planning.schemas import PlanSpec
+
+        detail = self.repository.plan_detail(self.session_id, self.plan_id)
+        return PlanSpec.from_dict(detail["plan"]["spec"])
 
     # ---------- 恢复 ----------
 

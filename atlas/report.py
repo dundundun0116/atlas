@@ -191,6 +191,29 @@ def _render_plan(plan: Dict[str, Any] | None) -> str:
 <p class="sub">依赖：{dep_text}</p>"""
 
 
+def _render_revisions(revisions: List[Dict[str, Any]]) -> str:
+    """局部重规划记录：为什么改、动了谁、谁保持有效（§5.6）。"""
+    if not revisions:
+        return "<p class=\"muted\">这份计划还没有发生重规划。</p>"
+    rows = []
+    for item in revisions:
+        rows.append(
+            "<tr>"
+            f"<td>#{_e(item.get('number'))}</td>"
+            f"<td><code>{_e(item.get('trigger'))}</code></td>"
+            f"<td>{_e('、'.join(item.get('changed_steps') or []) or '—')}</td>"
+            f"<td>{_e('、'.join(item.get('stale_steps') or []) or '无')}</td>"
+            f"<td>{_e('、'.join(item.get('reused_steps') or []) or '无')}</td>"
+            f"<td class=\"reason\">{_e(item.get('reason'))}</td>"
+            "</tr>"
+        )
+    return (
+        "<table><thead><tr><th>#</th><th>触发</th><th>改动步骤</th>"
+        "<th>失效</th><th>保持有效</th><th>原因</th></tr></thead><tbody>"
+        + "".join(rows) + "</tbody></table>"
+    )
+
+
 def _render_tool_calls(calls: List[Dict[str, Any]]) -> str:
     """工具调用区：四档结论与对账痕迹——"结果未知"必须一眼看得出来。"""
     if not calls:
@@ -225,6 +248,7 @@ def render_task_report(
     nodes: List[Any], research_base_url: str = "", title: str = "Atlas 任务报告",
     plan: Dict[str, Any] | None = None,
     tool_calls: List[Dict[str, Any]] | None = None,
+    revisions: List[Dict[str, Any]] | None = None,
 ) -> str:
     """渲染一页静态 HTML：状态 / 计划 / 工具调用 / 角色 / 证据 / trace / 时间线。"""
     summary = trace.get("summary") or {}
@@ -251,6 +275,9 @@ def render_task_report(
 
 <h2>计划与步骤</h2>
 {_render_plan(plan)}
+
+<h2>重规划记录（环境变化 → 局部失效）</h2>
+{_render_revisions(list(revisions or []))}
 
 <h2>工具调用与对账</h2>
 {_render_tool_calls(list(tool_calls or []))}

@@ -48,7 +48,8 @@ class PlanningDecision:
             "affected_steps": list(self.affected_steps),
             "stale_steps": list(self.stale_steps),
             "reused_steps": list(self.reused_steps),
-            "changes": [item.to_dict() for item in self.changes],
+            "changes": [item.to_dict() if hasattr(item, "to_dict") else dict(item)
+                        for item in self.changes],
             "reason": self.reason,
             "requires_replan": self.requires_replan,
         }

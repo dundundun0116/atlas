@@ -31,6 +31,7 @@ from atlas.storage.models import (
     EdgeRow,
     EventRow,
     NodeRow,
+    PlanRevisionRow,
     PlanRow,
     RunMetricRow,
     SessionRow,
@@ -934,6 +935,54 @@ class GraphRepository:
                 "steps": [self._step_row_to_dict(row) for row in steps],
                 "dependencies": [self._dependency_row_to_dict(row) for row in dependencies],
             }
+
+    def save_plan_revision(
+        self, session_id: str, plan_id: str, decision: Any, *,
+        actor: str = "scheduler",
+    ) -> Dict[str, Any]:
+        """追加一条重规划记录（只追加，不覆盖）。`decision` 是 `PlanningDecision`。"""
+        payload = decision.to_dict() if hasattr(decision, "to_dict") else dict(decision or {})
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            number = 1 + int(session.scalar(
+                select(func.count()).select_from(PlanRevisionRow).where(
+                    PlanRevisionRow.session_id == session_id,
+                    PlanRevisionRow.plan_id == plan_id,
+                )
+            ) or 0)
+            row = PlanRevisionRow(
+                session_id=session_id, revision_id=str(uuid4()), plan_id=plan_id,
+                number=number, trigger=str(payload.get("trigger") or ""),
+                changed_steps=list(payload.get("changed_steps") or []),
+                affected_steps=list(payload.get("affected_steps") or []),
+                stale_steps=list(payload.get("stale_steps") or []),
+                reused_steps=list(payload.get("reused_steps") or []),
+                changes=list(payload.get("changes") or []),
+                reason=str(payload.get("reason") or ""),
+            )
+            session.add(row)
+            return self._plan_revision_to_dict(row)
+
+    def plan_revisions(self, session_id: str, plan_id: str = "") -> List[Dict[str, Any]]:
+        with self._tx() as session:
+            query = select(PlanRevisionRow).where(PlanRevisionRow.session_id == session_id)
+            if plan_id:
+                query = query.where(PlanRevisionRow.plan_id == plan_id)
+            rows = session.scalars(query.order_by(PlanRevisionRow.number)).all()
+            return [self._plan_revision_to_dict(row) for row in rows]
+
+    @staticmethod
+    def _plan_revision_to_dict(row: PlanRevisionRow) -> Dict[str, Any]:
+        return {
+            "revision_id": row.revision_id, "plan_id": row.plan_id,
+            "number": row.number, "trigger": row.trigger,
+            "changed_steps": list(row.changed_steps or []),
+            "affected_steps": list(row.affected_steps or []),
+            "stale_steps": list(row.stale_steps or []),
+            "reused_steps": list(row.reused_steps or []),
+            "changes": list(row.changes or []),
+            "reason": row.reason, "created_at": row.created_at,
+        }
 
     def step_statuses(self, session_id: str, plan_id: str) -> Dict[str, str]:
         with self._tx() as session:

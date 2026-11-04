@@ -180,6 +180,8 @@ class PlanAdvanceView(BaseModel):
     needs_human: List[str] = Field(default_factory=list)
     failed: List[str] = Field(default_factory=list)
     recovered_in_flight: List[str] = Field(default_factory=list)
+    #: 这一轮发生的局部重规划（触发信号 / 失效步骤 / 复用步骤）
+    revisions: List[Dict[str, Any]] = Field(default_factory=list)
     stopped_reason: str = ""
     complete: bool = False
     steps: List[StepView] = Field(default_factory=list)
@@ -249,6 +251,8 @@ class PlanRecoverView(BaseModel):
     #: dry_run=false 且真的跑了：执行与收敛情况
     executed: List[str] = Field(default_factory=list)
     recovered_in_flight: List[str] = Field(default_factory=list)
+    #: 这一轮发生的局部重规划（触发信号 / 失效步骤 / 复用步骤）
+    revisions: List[Dict[str, Any]] = Field(default_factory=list)
     stopped_reason: str = ""
     complete: bool = False
     state: str = ""

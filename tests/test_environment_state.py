@@ -338,3 +338,42 @@ class TestApplyReplan:
             assert result["decision"]["trigger"] == "environment_changed"
         finally:
             database.close()
+
+    def test_revisions_are_appended_not_overwritten(self, tmp_path):
+        repository, database = self._repository(tmp_path)
+        try:
+            repository.create_session("s2", goal="两条分支")
+            repository.save_plan("s2", _branched_plan(), status="active")
+            decision = decide_replan(_branched_plan(), {}, ["a1"], reason="第一次")
+            first = repository.save_plan_revision("s2", "P1", decision)
+            second = repository.save_plan_revision("s2", "P1", decision)
+            assert (first["number"], second["number"]) == (1, 2)
+            assert len(repository.plan_revisions("s2", "P1")) == 2
+        finally:
+            database.close()
+
+
+class TestReportShowsRevisions:
+    def test_report_renders_replan_history(self):
+        from atlas.report import render_task_report
+
+        html = render_task_report(
+            state={"session_id": "s1", "goal": "g", "state": "paused"},
+            trace={"summary": {}, "events": []}, replay={"ok": True},
+            nodes=[], revisions=[{
+                "number": 1, "trigger": "environment_changed",
+                "changed_steps": ["write"], "stale_steps": ["confirm"],
+                "reused_steps": ["other"], "reason": "order-1 已经存在",
+            }],
+        )
+        assert "重规划记录" in html
+        assert "environment_changed" in html
+        assert "order-1 已经存在" in html
+
+    def test_report_says_so_when_no_revisions(self):
+        from atlas.report import render_task_report
+
+        html = render_task_report(
+            state={"session_id": "s1", "goal": "g", "state": "completed"},
+            trace={"summary": {}, "events": []}, replay={"ok": True}, nodes=[])
+        assert "还没有发生重规划" in html

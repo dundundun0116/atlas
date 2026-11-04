@@ -9,7 +9,7 @@
 """
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
     JSON,
@@ -241,6 +241,34 @@ class PlanRow(Base):
     created_at: Mapped[str] = mapped_column(String(32), default=_now)
     activated_at: Mapped[Optional[str]] = mapped_column(String(32))
     superseded_at: Mapped[Optional[str]] = mapped_column(String(32))
+
+
+class PlanRevisionRow(Base):
+    """一次局部重规划：**为什么改、改了哪几步、哪些保持有效**（设计文档 §5.6）。
+
+    只追加不修改：重规划历史本身是可审计材料，不能覆盖。
+    """
+
+    __tablename__ = "plan_revisions"
+    __table_args__ = (
+        UniqueConstraint("session_id", "plan_id", "number",
+                         name="uq_plan_revisions_number"),
+    )
+
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("sessions.session_id", ondelete="CASCADE"), primary_key=True
+    )
+    revision_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    plan_id: Mapped[str] = mapped_column(String(36), default="")
+    number: Mapped[int] = mapped_column(Integer, default=1)
+    trigger: Mapped[str] = mapped_column(String(32), default="environment_changed")
+    changed_steps: Mapped[List[str]] = mapped_column(JSON, default=list)
+    affected_steps: Mapped[List[str]] = mapped_column(JSON, default=list)
+    stale_steps: Mapped[List[str]] = mapped_column(JSON, default=list)
+    reused_steps: Mapped[List[str]] = mapped_column(JSON, default=list)
+    changes: Mapped[List[Dict[str, Any]]] = mapped_column(JSON, default=list)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[str] = mapped_column(String(32), default=_now)
 
 
 class StepRow(Base):

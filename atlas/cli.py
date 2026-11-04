@@ -28,6 +28,7 @@ def _cmd_report(args) -> int:
         plan_id = repository.active_plan_id(args.session)
         detail = repository.plan_detail(args.session, plan_id) if plan_id else None
         tool_calls = repository.tool_calls(args.session)
+        revisions = repository.plan_revisions(args.session, plan_id or "")
     finally:
         database.close()
 
@@ -37,7 +38,7 @@ def _cmd_report(args) -> int:
         os.makedirs(parent, exist_ok=True)
     path = write_task_report(
         out, state=state, trace=trace, replay=replay, nodes=nodes,
-        plan=detail, tool_calls=tool_calls,
+        plan=detail, tool_calls=tool_calls, revisions=revisions,
         research_base_url=args.research_base_url, title=args.title,
     )
     print(f"已生成任务报告：{path}")

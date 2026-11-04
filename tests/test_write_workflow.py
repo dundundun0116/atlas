@@ -241,3 +241,34 @@ class TestPreAndPostconditions:
         assert statuses["write"] == "done"
         assert statuses["confirm"] == "failed", "读回字段对不上就不能确认"
         tool.write = original_write
+
+
+class TestReplanIsWired:
+    """环境变化要**在主路径上**触发局部重规划，而不是只有库里的函数。"""
+
+    def test_precondition_violation_records_a_revision(self, db):
+        tool = ControllableWriteTool(mode="ok")
+        tool.world["order-1"] = {"amount": 999}
+        client = _client(db, tool)
+        _, body = _run(client, expect_absent=True)
+
+        assert body["steps"][0]["status"] == "failed"
+        revisions = body["revisions"]
+        assert len(revisions) == 1, "触发一次环境变化就该留下一条可解释记录"
+        record = revisions[0]
+        assert record["trigger"] == "environment_changed"
+        assert record["changed_steps"] == ["write"]
+        assert record["affected_steps"] == ["confirm"], "下游确认步建立在旧世界上"
+        assert record["number"] == 1
+        assert record["reason"], "必须能解释为什么重规划"
+        # 变更里带着指纹，说明"世界变成了什么样"
+        assert record["changes"][0]["target"] == "order-1"
+
+    def test_revision_is_persisted_and_numbered(self, db):
+        tool = ControllableWriteTool(mode="ok")
+        tool.world["order-1"] = {"amount": 999}
+        client = _client(db, tool)
+        _run(client, expect_absent=True)
+        stored = GraphRepository(db).plan_revisions("s1", "P1")
+        assert [item["number"] for item in stored] == [1]
+        assert stored[0]["stale_steps"] == [], "下游还没完成，不需要转 stale"
