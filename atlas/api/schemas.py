@@ -220,6 +220,34 @@ class ReconcileRequest(RequestMeta):
     detail: str = ""
 
 
+class PlanRecoverRequest(RequestMeta):
+    """按持久化状态恢复：dry_run=true 只看结论，不动任何状态。"""
+
+    dry_run: bool = False
+
+
+class PlanRecoverView(BaseModel):
+    session_id: str
+    plan_id: str = ""
+    plan_status: str = ""
+    action: str = "nothing_to_do"
+    blocked: bool = False
+    reason: str = ""
+    in_flight_tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
+    pending_steps: List[str] = Field(default_factory=list)
+    dispatched_steps: List[str] = Field(default_factory=list)
+    stale_steps: List[str] = Field(default_factory=list)
+    needs_human_steps: List[str] = Field(default_factory=list)
+    failed_steps: List[str] = Field(default_factory=list)
+    done_steps: List[str] = Field(default_factory=list)
+    #: dry_run=false 且真的跑了：执行与收敛情况
+    executed: List[str] = Field(default_factory=list)
+    recovered_in_flight: List[str] = Field(default_factory=list)
+    stopped_reason: str = ""
+    complete: bool = False
+    state: str = ""
+
+
 class NodeView(BaseModel):
     id: str
     type: str

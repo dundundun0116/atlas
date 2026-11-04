@@ -15,6 +15,7 @@ from atlas.api import schemas
 from atlas.api.graph import RepositoryGraph
 from atlas.orchestration import Orchestrator
 from atlas.planning.executors import ResearchStepExecutor
+from atlas.planning.recovery import assess_recovery
 from atlas.planning.research_plan import RESEARCH_PLAN_WORKFLOW, allowed_tools, build_research_plan
 from atlas.planning.runner import PlanRunner
 from atlas.planning.schemas import PlanSchemaError, PlanSpec
@@ -347,6 +348,26 @@ def create_app(repository: GraphRepository,
             raise NotFound(str(exc), request_id="")
         return _detail_view(session_id, detail)
 
+    def _build_executor(session_id: str, problem: str) -> ResearchStepExecutor:
+        """把模型 / 工具 / 上下文 / 预算接成一份 Step 执行器（advance 与 recover 共用）。"""
+        graph = RepositoryGraph(
+            repository, session_id,
+            **({"context_budget_tokens": context_budget_tokens}
+               if context_budget_tokens else {}),
+            **({"context_token_counter": context_token_counter}
+               if context_token_counter else {}),
+        )
+        return ResearchStepExecutor(
+            orchestrate_llm,
+            problem=problem,
+            research_tool=research_tool,
+            context_provider=lambda role, focus: graph.context_package(role, focus=focus).text,
+            session_id=session_id,
+            budget=replace(orchestrate_budget) if orchestrate_budget is not None else None,
+            # 给了 repository 就会把工具调用记成持久化 ToolCall（可对账、不盲重发）
+            repository=repository,
+        )
+
     def _activate(session_id: str, plan_id: str) -> dict:
         """激活计划 + 把会话的工作流版本切到 DAG（两件事必须一起发生）。"""
         detail = repository.activate_plan(session_id, plan_id)
@@ -384,23 +405,7 @@ def create_app(repository: GraphRepository,
                 request_id=payload.request_id,
             )
 
-        graph = RepositoryGraph(
-            repository, session_id,
-            **({"context_budget_tokens": context_budget_tokens}
-               if context_budget_tokens else {}),
-            **({"context_token_counter": context_token_counter}
-               if context_token_counter else {}),
-        )
-        executor = ResearchStepExecutor(
-            orchestrate_llm,
-            problem=detail["plan"]["summary"],
-            research_tool=research_tool,
-            context_provider=lambda role, focus: graph.context_package(role, focus=focus).text,
-            session_id=session_id,
-            budget=replace(orchestrate_budget) if orchestrate_budget is not None else None,
-            # 给了 repository 就会把工具调用记成持久化 ToolCall（可对账、不盲重发）
-            repository=repository,
-        )
+        executor = _build_executor(session_id, detail["plan"]["summary"])
         runner = PlanRunner(repository, session_id, plan_id, executor,
                             max_ticks=max(2, payload.max_steps * 4))
         report = runner.run()
@@ -419,6 +424,54 @@ def create_app(repository: GraphRepository,
             stopped_reason=report.stopped_reason,
             complete=report.complete,
             steps=_step_views(after),
+        )
+
+    @app.post("/tasks/{session_id}/plans/{plan_id}/recover",
+              response_model=schemas.PlanRecoverView)
+    def recover_plan(session_id: str, plan_id: str, payload: schemas.PlanRecoverRequest):
+        """按持久化状态恢复：先评估能不能接着跑，再决定要不要动手。
+
+        `dry_run=true` 只回答"卡在哪"；否则在**没有在途未知调用**的前提下续跑，
+        并且只补未提交的那一步——已完成的 Step 不会重跑。
+        """
+        runtime.get_state(session_id)
+        try:
+            detail = repository.plan_detail(session_id, plan_id)
+        except KeyError as exc:
+            raise NotFound(str(exc), request_id=payload.request_id)
+        if detail["plan"]["status"] != "active":
+            raise StateConflict(
+                f"计划 {plan_id} 当前状态 {detail['plan']['status']}，只有 active 计划能恢复",
+                request_id=payload.request_id,
+            )
+
+        status = assess_recovery(repository, session_id)
+        if status.plan_id != plan_id:
+            # 传进来的不是当前激活计划：评估结果对不上，明确拒绝而不是混着报
+            raise StateConflict(
+                f"计划 {plan_id} 不是当前激活计划（当前是 {status.plan_id or '无'}）",
+                request_id=payload.request_id,
+            )
+        result = schemas.PlanRecoverView(**status.to_dict(),
+                                         state=runtime.get_state(session_id)["state"])
+        if payload.dry_run or status.blocked:
+            return result
+
+        if orchestrate_llm is None:
+            raise Unrecoverable(
+                "本部署未配置模型（启动参数或 LLM_API_KEY/LLM_MODEL）",
+                request_id=payload.request_id,
+            )
+        executor = _build_executor(session_id, detail["plan"]["summary"])
+        report = PlanRunner(repository, session_id, plan_id, executor).run()
+        _sync_task_state(runtime, session_id, report)
+        return schemas.PlanRecoverView(
+            **status.to_dict(),
+            executed=list(report.executed),
+            recovered_in_flight=list(report.recovered_in_flight),
+            stopped_reason=report.stopped_reason,
+            complete=report.complete,
+            state=runtime.get_state(session_id)["state"],
         )
 
     def _sync_task_state(runtime_: Any, session_id: str, report) -> None:
@@ -462,9 +515,17 @@ def create_app(repository: GraphRepository,
             record = repository.get_tool_call(session_id, tool_call_id)
         except KeyError as exc:
             raise NotFound(str(exc), request_id=payload.request_id)
+        if record["status"] == "dispatched":
+            # 派发之后进程挂了：没有结论，先按"结果未知"落定，再走对账
+            record = repository.settle_tool_call(
+                session_id, tool_call_id, status="indeterminate",
+                outcome="unknowable",
+                error={"kind": "unknown_commit",
+                       "message": "已派发但未收到结论，进入对账"},
+            )
         if record["status"] != "indeterminate":
             raise StateConflict(
-                f"工具调用当前状态 {record['status']}，只有 indeterminate 需要对账",
+                f"工具调用当前状态 {record['status']}，只有 dispatched/indeterminate 需要对账",
                 request_id=payload.request_id,
             )
 
