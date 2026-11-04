@@ -159,11 +159,28 @@ class DependencyView(BaseModel):
     binding: Dict[str, str] = Field(default_factory=dict)
 
 
+class PlanRevisionView(BaseModel):
+    """一次局部重规划：为什么改、改了谁、谁保持有效。"""
+
+    revision_id: str = ""
+    number: int = 0
+    trigger: str = ""
+    changed_steps: List[str] = Field(default_factory=list)
+    affected_steps: List[str] = Field(default_factory=list)
+    stale_steps: List[str] = Field(default_factory=list)
+    reused_steps: List[str] = Field(default_factory=list)
+    changes: List[Dict[str, Any]] = Field(default_factory=list)
+    reason: str = ""
+    created_at: str = ""
+
+
 class PlanDetailView(BaseModel):
     session_id: str
     plan: PlanView
     steps: List[StepView] = Field(default_factory=list)
     dependencies: List[DependencyView] = Field(default_factory=list)
+    #: 该计划发生过的局部重规划（按序号升序）
+    revisions: List[PlanRevisionView] = Field(default_factory=list)
 
 
 class PlanListView(BaseModel):

@@ -281,6 +281,8 @@ def create_app(repository: GraphRepository,
     def _detail_view(session_id: str, detail: dict) -> dict:
         return {
             "session_id": session_id,
+            "revisions": repository.plan_revisions(
+                session_id, detail["plan"]["plan_id"]),
             "plan": _plan_view(detail["plan"]),
             "steps": _step_views(detail),
             "dependencies": [

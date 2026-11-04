@@ -406,6 +406,48 @@ export default function AtlasPage() {
             </section>
           )}
 
+          {planDetail && (
+            <section className="panel">
+              <h2>重规划记录</h2>
+              {(planDetail.revisions ?? []).length === 0 ? (
+                <p className="small muted">这份计划还没有发生局部重规划。</p>
+              ) : (
+                <>
+                  <p className="small muted">
+                    环境变化只会让**相关**步骤失效：受影响的已完成下游转 stale，
+                    不相关分支原样有效。
+                  </p>
+                  <table className="atlas-nodes">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>触发</th>
+                        <th>改动步骤</th>
+                        <th>失效</th>
+                        <th>保持有效</th>
+                        <th>原因</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(planDetail.revisions ?? []).map((item) => (
+                        <tr key={item.revision_id}>
+                          <td>{item.number}</td>
+                          <td>
+                            <code>{item.trigger}</code>
+                          </td>
+                          <td>{item.changed_steps.join("、") || "—"}</td>
+                          <td>{item.stale_steps.join("、") || "无"}</td>
+                          <td>{item.reused_steps.join("、") || "无"}</td>
+                          <td className="small muted">{item.reason || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+            </section>
+          )}
+
           {recovery && (
             <section className="panel">
               <h2>恢复</h2>

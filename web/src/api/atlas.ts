@@ -211,11 +211,25 @@ export interface AtlasPlan {
   validation: Record<string, unknown>;
 }
 
+export interface AtlasPlanRevision {
+  revision_id: string;
+  number: number;
+  trigger: string;
+  changed_steps: string[];
+  affected_steps: string[];
+  stale_steps: string[];
+  reused_steps: string[];
+  changes: Array<{ target?: string; kind?: string; before?: string; after?: string }>;
+  reason: string;
+  created_at: string;
+}
+
 export interface AtlasPlanDetail {
   session_id: string;
   plan: AtlasPlan;
   steps: AtlasStep[];
   dependencies: AtlasDependency[];
+  revisions: AtlasPlanRevision[];
 }
 
 export interface AtlasPlanAdvanceResult {

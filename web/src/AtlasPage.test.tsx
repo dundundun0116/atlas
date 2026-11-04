@@ -57,6 +57,7 @@ const PLAN_DETAIL = {
     { from_step_id: "retrieve", to_step_id: "draft", kind: "data",
       binding: { output_name: "refs", input_name: "evidence" } },
   ],
+  revisions: [],
 };
 
 const RECOVERY = {
@@ -301,5 +302,41 @@ describe("AtlasPage", () => {
       );
       expect(creates.length).toBe(1);
     });
+  });
+});
+
+describe("重规划记录面板", () => {
+  it("有重规划时显示触发、失效与保持有效的步骤", async () => {
+    const base = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/plans/P1")
+          && !String(url).includes("/recover")
+          && !String(url).includes("/advance")
+          && init?.method !== "POST") {
+        return respond({
+          ...PLAN_DETAIL,
+          revisions: [{
+            revision_id: "r1", number: 1, trigger: "environment_changed",
+            changed_steps: ["write"], affected_steps: ["confirm"],
+            stale_steps: [], reused_steps: ["other"],
+            changes: [{ target: "order-1", kind: "created", before: "", after: "abc" }],
+            reason: "order-1 已经存在，不能重复创建", created_at: "",
+          }],
+        });
+      }
+      return (base as any)(url, init);
+    });
+
+    render(<AtlasPage />);
+    expect(await screen.findByRole("heading", { name: "重规划记录" })).toBeInTheDocument();
+    expect(screen.getByText("environment_changed")).toBeInTheDocument();
+    expect(screen.getByText("order-1 已经存在，不能重复创建")).toBeInTheDocument();
+    expect(screen.getByText("other")).toBeInTheDocument();
+  });
+
+  it("没有重规划时明确说明", async () => {
+    render(<AtlasPage />);
+    expect(await screen.findByRole("heading", { name: "重规划记录" })).toBeInTheDocument();
+    expect(screen.getByText(/还没有发生局部重规划/)).toBeInTheDocument();
   });
 });

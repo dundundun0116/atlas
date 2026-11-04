@@ -166,6 +166,30 @@ python -m atlas.cli eval --tasks 12 --seed 7 --model deepseek-v4.1-flash \
 第 1 条是真 bug（改的是生产代码），第 2 条是评测契约（改的是喂给模型的说明）——
 两者都写进了 `EVAL_PREAMBLE` 的注释与报告口径里，没有偷偷调松判分。
 
+### 公开数据集适配与 DAG 消融（Phase 5 剩余）
+
+**适配层**（`atlas/evaluation/datasets.py`）只做格式映射，**不夹带效果声明**：
+
+```bash
+python -c "from atlas.evaluation.datasets import load_jsonl; print(load_jsonl('data/samples/bench_mini.jsonl'))"
+```
+
+它按我们自己的 oracle 约束**拒绝**不合形状的记录（gold 必须是数值、语料里只能有一个
+`ANSWER:<gold>` 标记、干扰项要显式给），而不是"尽力而为"——评测里最贵的错误是悄悄变松的判分。
+接了公开集 ≠ 跑过公开集；这一层到位不等于有可引用数字。
+
+**消融**（`atlas/evaluation/ablation.py`）用**同一批题、同一个判分、同一个脚本化研究者**
+跑 `plan_dag_v1` 与 `legacy_research_v1`：
+
+```bash
+python -m atlas.evaluation.ablation --tasks 6 --seed 7
+```
+
+2026-11-04 实测（6 题，干净题）：两条路径 **6/6 都答对、都到终态、工具调用 6 次、
+模型调用 18 次**——干净题上 DAG **没有多花模型调用**（`repair` 在没有 issues 时是纯计算，
+不调模型）。差别不在效果而在机制：DAG 有恢复入口、未知结果能对账、下游失效有记录，
+`legacy_research_v1` 三样都没有（所以消融表里「恢复入口」一行对它是"没有"，不是 0）。
+
 ## 7. 诚实要求
 
 - 离线表格里出现的数字只说明"指标能区分策略"，不说明"Atlas 比摘要强 N 个百分点"；
