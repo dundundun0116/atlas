@@ -20,11 +20,14 @@ from atlas.tools.writes import ControllableWriteTool, WriteToolError
 VALUE = {"amount": 100, "currency": "CNY"}
 
 
-def _plan_payload(target="order-1", value=None):
+def _plan_payload(target="order-1", value=None, approved=None):
     payload = build_write_plan(target=target, value=value or VALUE).to_dict()
     for step in payload["steps"]:
         if step["step_id"] == "write":
             step["tool_args_template"] = {"target": target, "value": dict(value or VALUE)}
+            if approved is not None:
+                # 不可补偿的副作用要先批准才能派发；替身可补偿，平时不用设
+                step["tool_args_template"]["approved"] = approved
         if step["step_id"] == "confirm":
             step["tool_args_template"] = {"target": target}
     return payload
@@ -45,10 +48,11 @@ def _client(db, tool=None):
     ))
 
 
-def _run(client, target="order-1"):
+def _run(client, target="order-1", approved=None):
     client.post("/tasks", json={"session_id": "s1", "goal": "写入"})
     submitted = client.post("/tasks/s1/plans",
-                            json={"plan": _plan_payload(target), "activate": True}).json()
+                            json={"plan": _plan_payload(target, approved=approved),
+                                  "activate": True}).json()
     plan_id = submitted["plan"]["plan_id"]
     body = client.post(f"/tasks/s1/plans/{plan_id}/advance", json={}).json()
     return plan_id, body
@@ -136,9 +140,12 @@ class TestPartialWriteIsCompensated:
             supports_compensation=False,
         )
         client = _client(db, tool)
-        _, body = _run(client)
+        # 这个工具声明"不可补偿"，所以派发前必须先批准——要测的是**批准之后**
+        # 部分生效仍只能交给人，而不是被闸门挡在门外
+        _, body = _run(client, approved=True)
         statuses = {step["step_id"]: step["status"] for step in body["steps"]}
-        assert statuses["write"] in ("failed", "needs_human")
+        assert statuses["write"] == "needs_human"
+        assert any(op.startswith("write:") for op in tool.operations), "确实写过"
 
 
 class TestGuards:

@@ -23,7 +23,11 @@ from atlas.orchestration.orchestrator import (
 from atlas.planning.policies_call import call_model
 from atlas.planning.runner import StepOutcome
 from atlas.tools.calls import EffectClass, ToolSpec
-from atlas.tools.compensation import decide_after_call, run_compensation
+from atlas.tools.compensation import (
+    decide_after_call,
+    requires_human_approval,
+    run_compensation,
+)
 from atlas.tools.dispatcher import ToolDispatcher
 from atlas.tools.protocol import ResearchRequest, ResearchResult, ResearchToolError
 
@@ -229,13 +233,31 @@ class ResearchStepExecutor:
             effect_class=EffectClass.EXTERNAL_SIDE_EFFECT,
             supports_idempotency=True, supports_lookup=True, supports_compensation=True,
         )
+        # 派发**之前**的闸门：副作用不可补偿的工具，出事之后只能靠人收拾，
+        # 所以必须先让人点头，而不是"先写了再说"。`approved` 只能来自计划本身
+        # （tool_args_template）或显式输入——执行器不替人拍板。
+        approved = bool(inputs.get("approved")
+                        or (step.tool_args_template or {}).get("approved"))
+        if requires_human_approval(spec) and not approved:
+            return StepOutcome(
+                status="needs_human",
+                output={"target": target, "value": value, "applied_ok": False,
+                        "compensated": False, "approval_required": True},
+                error={"kind": "approval_required",
+                       "message": f"{spec.name} 的副作用不可补偿，派发前必须人工批准"},
+            )
         dispatcher = ToolDispatcher(
             self.repository, scope["session_id"], spec,
             plan_id=str(scope.get("plan_id") or ""),
             step_id=str(scope.get("step_id") or ""),
         )
-        outcome = dispatcher.invoke(lambda: self.write_tool.write(target, value),
-                                    {"target": target, "value": value})
+        # 真实网络工具要拿到幂等键才能放进请求头；内存替身不需要。
+        if getattr(self.write_tool, "wants_idempotency_key", False):
+            call_fn = (lambda key: self.write_tool.write(
+                target, value, idempotency_key=key))  # noqa: E731
+        else:
+            call_fn = lambda: self.write_tool.write(target, value)  # noqa: E731
+        outcome = dispatcher.invoke(call_fn, {"target": target, "value": value})
         output: Dict[str, Any] = {"target": target, "value": value,
                                   "applied_ok": False, "compensated": False}
         if outcome.ok:
@@ -249,7 +271,8 @@ class ResearchStepExecutor:
                                          compensation_args={"key": target})
             if not decision.should_compensate:
                 output["compensation_failed"] = decision.reason
-                return StepOutcome(status="failed", output=output,
+                # 半成品还留在外部世界：这不是"失败"，是"必须有人来收"
+                return StepOutcome(status="needs_human", output=output,
                                    error={"kind": "partial", "message": decision.reason})
             result = run_compensation(
                 self.repository, scope["session_id"], call, spec,
@@ -266,6 +289,12 @@ class ResearchStepExecutor:
             return StepOutcome(status="failed", output=output,
                                error={"kind": "partial_compensated",
                                       "message": "部分写入已补偿，世界已复原"})
+        if outcome.needs_human:
+            # 结果未知：**不是失败**。失败会让计划继续往下走，而外部可能已经写进去了。
+            output["tool_call_id"] = outcome.tool_call_id
+            output["needs_reconcile"] = True
+            return StepOutcome(status="indeterminate", output=output,
+                               error=dict(outcome.error or {}))
         return StepOutcome(status="failed", output=output,
                            error=dict(outcome.error or {}))
 
@@ -278,7 +307,17 @@ class ResearchStepExecutor:
         if not target:
             return StepOutcome(status="failed", error={
                 "kind": "invalid_request", "message": "confirm 步缺少 target"})
-        observed = self.write_tool.observe(target)
+        try:
+            observed = self.write_tool.observe(target)
+        except Exception as exc:  # noqa: BLE001 - 读不回 ≠ 没写成
+            # 读回失败（超时/5xx）不能当成"确认失败"：那会把一次网络抖动
+            # 读成"外部世界没写进去"，接着重跑就变成重复副作用。
+            return StepOutcome(
+                status="indeterminate",
+                output={"target": target, "observed": None, "confirmed": None},
+                error={"kind": getattr(exc, "kind", "unknown_commit"),
+                       "message": f"读回失败，无法确认外部状态：{exc}"},
+            )
         return StepOutcome(output={
             "target": target,
             "observed": dict(observed or {}) if observed else None,

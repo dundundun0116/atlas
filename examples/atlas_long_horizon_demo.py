@@ -8,15 +8,24 @@
 2. **检索超时（结果未知）**：工具调用落 `indeterminate`、步骤 `needs_human`、
    任务 `paused`——此时**恢复评估会说"必须先对账"**，而不是硬着头皮再跑；
 3. **写入部分生效**：`failed_partial` → **自动补偿** → 外部世界复原 → 任务失败但没留残渣；
-4. **崩溃后恢复**：跑到一半进程没了，`recover` 只补未完成的那几步。
+4. **崩溃后恢复**：跑到一半进程没了，`recover` 只补未完成的那几步；
+5. **真实 HTTP 写工具**：本地起的真服务，写入后挂住 → 超时 → 对账按幂等键查回
+   → 结算为 applied（**服务端只收到一次写**）；换成不认幂等键的老服务，
+   则**一个请求都不发**，先交给人。
 
-全部用替身（脚本化 LLM / 假检索工具 / 可控写工具），不碰网络也不烧 token。
+1–4 用替身（脚本化 LLM / 假检索工具 / 可控写工具）；5 真的起一个 127.0.0.1 上的
+HTTP 服务——它证明的是"协议接上真网络还成立"，用假网络证明不了这件事。
+全程不烧 token、不连外网。
 """
 
 import json
 import os
 import sys
 import tempfile
+import threading
+import time
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -27,6 +36,12 @@ from atlas.planning.write_workflow import build_write_plan  # noqa: E402
 from atlas.storage.repository import GraphRepository, open_database  # noqa: E402
 from atlas.tools import EvidenceItem, ResearchResult  # noqa: E402
 from atlas.tools.protocol import ResearchToolError  # noqa: E402
+from atlas.tools.dispatcher import ToolDispatcher  # noqa: E402
+from atlas.tools.http_write import (  # noqa: E402
+    LEGACY_PROFILE,
+    HttpWriteTool,
+    ServiceProfile,
+)
 from atlas.tools.writes import ControllableWriteTool  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -221,13 +236,135 @@ def scenario_crash_recovery(tmp):
     db.close()
 
 
+def _start_service():
+    """起一个真在监听的"外部系统"：写入 → 可按键查回 → 可读回。"""
+
+    state = {"objects": {}, "keys": {}, "writes": 0, "requests": []}
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *_args):
+            return
+
+        def _send(self, code, payload):
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # 客户端已经超时走人——这正是"写进去了但没人知道"
+
+        def _last(self):
+            segment = urllib.parse.urlparse(self.path).path.rstrip("/").rsplit("/", 1)[-1]
+            return urllib.parse.unquote(segment)
+
+        def do_PUT(self):
+            target = self._last()
+            key = self.headers.get("Idempotency-Key")
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            value = json.loads(raw.decode("utf-8")) if raw else {}
+            state["requests"].append(("PUT", key))
+            state["objects"][target] = value
+            state["writes"] += 1
+            if key:
+                state["keys"][key] = {"applied": value}
+            time.sleep(0.4)  # 写进去了才拖到超时——真实的 unknown_commit
+            self._send(201, {"applied": value})
+
+        def do_GET(self):
+            path = urllib.parse.urlparse(self.path).path
+            if path.startswith("/idempotency/"):
+                key = urllib.parse.unquote(path[len("/idempotency/"):])
+                found = state["keys"].get(key)
+                self._send(200, found) if found else self._send(404, {"error": "none"})
+                return
+            found = state["objects"].get(self._last())
+            self._send(200, {"value": found}) if found else self._send(404, {"error": "none"})
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}", state
+
+
+def _write_payload(target, value, *, approved=False):
+    payload = build_write_plan(target=target, value=value).to_dict()
+    for step in payload["steps"]:
+        if step["step_id"] == "write":
+            step["tool_args_template"] = {"target": target, "value": dict(value),
+                                          "approved": approved}
+    return payload
+
+
+def scenario_real_http_write(tmp):
+    """5) 真实 HTTP 写工具：超时后靠幂等键收敛；老服务则一个请求都不发。"""
+    _title("场景 5 · 真实 HTTP 写工具：超时之后靠幂等键对账")
+    server, base_url, world = _start_service()
+    try:
+        value = {"amount": 100, "currency": "CNY"}
+        # 把超时压到 0.2s，服务端要 0.4s 才回——于是"写进去了但没人知道"
+        writer = HttpWriteTool(base_url=base_url,
+                               profile=ServiceProfile(name="idempotent_service",
+                                                      timeout_s=0.2))
+        client, db = _client(os.path.join(tmp, "s5.db"), tool=ScriptedResearchTool(),
+                             writer=writer)
+        client.post("/tasks", json={"session_id": "r5", "goal": "写入订单"})
+        client.post("/tasks/r5/plans",
+                    json={"plan": _write_payload("order-1", value), "activate": True})
+        body = client.post("/tasks/r5/plans/P1/advance", json={}).json()
+        steps = {step["step_id"]: step["status"] for step in body["steps"]}
+        calls = client.get("/tasks/r5/tool-calls").json()["tool_calls"]
+        call = calls[0]
+        print(f"写步骤：{steps['write']}（服务端其实已经写进去了）")
+        print(f"工具调用：{call['status']} / {call['outcome']}")
+        print(f"服务端写次数：{world['writes']}，对象：{world['objects']}")
+
+        assess = client.post("/tasks/r5/plans/P1/recover",
+                             json={"dry_run": True}).json()
+        print(f"恢复评估：{assess['action']}（{assess['reason']}）")
+
+        # 真实的对账路径：先按幂等键查回原结果，查不到才读回对象
+        dispatcher = ToolDispatcher(GraphRepository(db), "r5", writer.SPEC)
+        settled = dispatcher.reconcile(call["tool_call_id"],
+                                       lookup=writer.lookup,
+                                       observe=lambda: writer.observe("order-1"))
+        print(f"对账之后：{settled.status.value} / {settled.outcome}"
+              f"（查回 {settled.result}）")
+        print(f"服务端仍然只写了 {world['writes']} 次——没有重发")
+        db.close()
+
+        # 换成不认幂等键的老服务：不可补偿 ⇒ 派发前就要人批准
+        _title("场景 5b · 老服务：不认幂等键，所以一个请求都不发")
+        _, legacy_url, legacy_world = _start_service()
+        client, db = _client(os.path.join(tmp, "s5b.db"), tool=ScriptedResearchTool(),
+                             writer=HttpWriteTool(base_url=legacy_url,
+                                                  profile=LEGACY_PROFILE))
+        client.post("/tasks", json={"session_id": "r5b", "goal": "写入订单"})
+        client.post("/tasks/r5b/plans",
+                    json={"plan": _write_payload("order-1", value), "activate": True})
+        body = client.post("/tasks/r5b/plans/P1/advance", json={}).json()
+        steps = {step["step_id"]: step["status"] for step in body["steps"]}
+        print(f"写步骤：{steps['write']}（闸门拦在派发之前）")
+        print(f"服务端收到的请求数：{len(legacy_world['requests'])}")
+        db.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         scenario_research_and_write(tmp)
         scenario_unknown_then_recover(tmp)
         scenario_partial_write(tmp)
         scenario_crash_recovery(tmp)
-    print("\n全部场景完成：计划 / 工具调用 / 补偿 / 恢复 四条链路都跑在真实代码路径上。")
+        scenario_real_http_write(tmp)
+    print("\n全部场景完成：计划 / 工具调用 / 补偿 / 恢复 / 真实网络对账"
+          " 五条链路都跑在真实代码路径上。")
     return 0
 
 

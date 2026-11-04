@@ -13,6 +13,7 @@
 """
 
 from dataclasses import dataclass, field
+from inspect import Parameter, signature
 from typing import Any, Callable, Dict, Optional
 
 from atlas.tools.calls import (
@@ -93,8 +94,14 @@ class ToolDispatcher:
 
     # ---------- 主流程 ----------
 
-    def invoke(self, call_fn: Callable[[], Any], args: Dict[str, Any]) -> CallOutcome:
-        """发起一次调用；`call_fn` 抛异常时按"是否可确定"分类落库。"""
+    def invoke(self, call_fn: Callable[..., Any], args: Dict[str, Any]) -> CallOutcome:
+        """发起一次调用；`call_fn` 抛异常时按"是否可确定"分类落库。
+
+        `call_fn` 有两种形状：
+        - `lambda: tool.write(target, value)`（不需要幂等键，如内存替身）；
+        - `lambda key: tool.write(target, value, idempotency_key=key)`（**真实网络工具**）——
+          幂等键只有这里知道，工具必须拿到它才能放进请求头，否则服务端无从去重。
+        """
         proposed = self.repository.propose_tool_call(
             self.session_id, tool_name=self.spec.name, args=args,
             step_id=self.step_id, plan_id=self.plan_id,
@@ -119,7 +126,7 @@ class ToolDispatcher:
             return self._reuse(latest)
 
         try:
-            raw = call_fn()
+            raw = _call_with_key(call_fn, call["idempotency_key"])
         except Exception as exc:  # noqa: BLE001 - 分类比吞掉/重抛更重要
             return self._settle_error(tool_call_id, exc)
         return self._settle_success(tool_call_id, raw)
@@ -129,7 +136,16 @@ class ToolDispatcher:
                   lookup: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
                   observe: Optional[Callable[[], Any]] = None,
                   expected: Any = None) -> CallOutcome:
-        """对账：优先用幂等键查原结果，其次读回目标对象比对；实在判不了就留 indeterminate。"""
+        """对账：优先用幂等键查原结果，其次读回目标对象比对；实在判不了就留 indeterminate。
+
+        三条纪律（都来自"不能让上层以为查过了"）：
+
+        1. 工具**没声明** `supports_lookup` 却传了 `lookup`：不查，直接记 `unknowable`
+           并写明缺的是哪个能力——静默跳过会让调用方以为"查了但没有"；
+        2. 查询/读回**自己出错**（网络断了、服务返回 5xx）：不能当成"查到了没有"，
+           同样只能是 `unknowable`——否则一次网络抖动就会被读成"没生效"，接着重发；
+        3. 查回来的结果**要落库**：重跑那一步得复用它，而不是再发一次请求。
+        """
         call = self.repository.get_tool_call(self.session_id, tool_call_id)
         if call["status"] not in ("indeterminate", "reconciling"):
             return self._from_record(call, reconciled=call["status"] == "reconciled")
@@ -139,18 +155,43 @@ class ToolDispatcher:
             latest = self.repository.get_tool_call(self.session_id, tool_call_id)
             return self._from_record(latest)
 
+        if lookup is not None and not self.spec.supports_lookup:
+            return self._unknowable(
+                tool_call_id,
+                detail=f"{self.spec.name} 未声明 supports_lookup，无法按幂等键查结果",
+                evidence={"capability": "lookup", "declared": False},
+            )
+
         if lookup is not None and self.spec.supports_lookup:
-            found = lookup(call["idempotency_key"])
+            try:
+                found = lookup(call["idempotency_key"])
+            except Exception as exc:  # noqa: BLE001 - 查询失败不能读成"没查到"
+                return self._unknowable(
+                    tool_call_id, detail=f"按幂等键查询失败：{exc}",
+                    evidence={"stage": "lookup", "error": str(exc)},
+                )
             if found is not None:
                 record = self.repository.finish_reconcile(
                     self.session_id, tool_call_id, outcome=Outcome.APPLIED.value,
                     detail="按幂等键查到原结果", evidence={"found": True},
+                    result=dict(found) if isinstance(found, dict) else {"value": found},
                     actor=self.actor,
                 )
-                record["result"] = dict(found)
                 return self._from_record(record, reconciled=True)
 
-        observed = observe() if observe is not None else None
+        if observe is None:
+            return self._unknowable(
+                tool_call_id,
+                detail="既没有可用的幂等键查询，也没有可读回的目标对象",
+                evidence={"capability": "observe", "declared": False},
+            )
+        try:
+            observed = observe()
+        except Exception as exc:  # noqa: BLE001 - 读回失败同理
+            return self._unknowable(
+                tool_call_id, detail=f"读回目标对象失败：{exc}",
+                evidence={"stage": "observe", "error": str(exc)},
+            )
         decision: ReconcileDecision = decide(observed, expected)
         record = self.repository.finish_reconcile(
             self.session_id, tool_call_id, outcome=decision.outcome.value
@@ -160,6 +201,19 @@ class ToolDispatcher:
         return self._from_record(record, reconciled=record["status"] == "reconciled")
 
     # ---------- 内部 ----------
+
+    def _unknowable(self, tool_call_id: str, *, detail: str,
+                    evidence: Dict[str, Any]) -> CallOutcome:
+        """对账判不了：落 `unknowable`，状态回到 `indeterminate` 继续冻结。
+
+        这条路必须存在：**"查不了"和"查到了没有"是两件事**，
+        混成一件就会在下一次重试里变成重复副作用。
+        """
+        record = self.repository.finish_reconcile(
+            self.session_id, tool_call_id, outcome=Outcome.UNKNOWABLE.value,
+            detail=detail, evidence=dict(evidence), actor=self.actor,
+        )
+        return self._from_record(record)
 
     def _reuse(self, call: Dict[str, Any]) -> CallOutcome:
         status = ToolCallStatus(call["status"])
@@ -232,3 +286,20 @@ def decide(observed: Any, expected: Any = None) -> ReconcileDecision:
     from atlas.tools.calls import decide_from_observation
 
     return decide_from_observation(observed, expected=expected)
+
+
+def _call_with_key(call_fn: Callable[..., Any], key: str) -> Any:
+    """按 `call_fn` 的形状决定要不要把幂等键递进去（显式协议，不靠猜）。
+
+    只接受一位位置参数 ⇒ 这一位就是幂等键；零位 ⇒ 工具自己不需要（内存替身）。
+    形状之外（两个以上参数）就按零位调用，让工具自己报错——不猜。
+    """
+    try:
+        params = [p for p in signature(call_fn).parameters.values()
+                  if p.kind in (Parameter.POSITIONAL_ONLY,
+                                Parameter.POSITIONAL_OR_KEYWORD)]
+    except (TypeError, ValueError):  # 内建/不可内省的可调用对象
+        params = []
+    if len(params) == 1:
+        return call_fn(key)
+    return call_fn()

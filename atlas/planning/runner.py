@@ -184,9 +184,17 @@ class PlanRunner:
         self._finish(step_id, target, verification, outcome, report, attempt)
 
     def _verify(self, step: StepSpec, outcome: StepOutcome):
-        """判据求值：`None` 一律转人工，绝不当通过（§2.5）。"""
-        if outcome.status in ("indeterminate", "unknown_commit"):
-            return StepStatus.NEEDS_HUMAN, {"verified": None, "reason": "结果未知，需对账"}
+        """判据求值：`None` 一律转人工，绝不当通过（§2.5）。
+
+        `indeterminate` / `unknown_commit` / `needs_human` 是三种"执行器明确表示
+        自己判不了"的回报——它们**不能掉进判据里**：未知的外部副作用去跑一遍
+        `applied_ok` 只会得到一个看起来很确定的 `False`。
+        """
+        if outcome.status in ("indeterminate", "unknown_commit", "needs_human"):
+            return StepStatus.NEEDS_HUMAN, {
+                "verified": None,
+                "reason": outcome.error.get("message") or "结果未知，需对账或人工确认",
+            }
         if outcome.status == "failed":
             return StepStatus.FAILED, {"verified": False,
                                        "reason": outcome.error.get("message", "执行失败")}
