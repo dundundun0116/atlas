@@ -29,9 +29,46 @@ const TASK = {
   edges: [],
   checkpoint: null,
   provenance: {},
+  workflow_version: "legacy_research_v1",
 };
 
 const REPORT = { session_id: "demo", state: "planning", report: "# 任务报告\n状态: planning" };
+
+const PLANS = [
+  {
+    plan_id: "P1", revision: 1, status: "active", summary: "研究流程",
+    strategy: "dag", generated_by: "atlas/plan_dag_v1",
+    validator_version: "plan-validator/1", created_at: "", activated_at: "",
+    validation: { ok: true, activatable: true, issues: [] },
+  },
+];
+
+const PLAN_DETAIL = {
+  session_id: "demo",
+  plan: PLANS[0],
+  steps: [
+    { step_id: "retrieve", title: "检索证据", kind: "tool", status: "needs_human",
+      ordinal: 10, tool_name: "compassrag", attempt_count: 1,
+      status_reason: "结果未知，需对账", stale_reason: "" },
+    { step_id: "draft", title: "起草答案", kind: "llm", status: "blocked",
+      ordinal: 20, tool_name: "", attempt_count: 0, status_reason: "", stale_reason: "" },
+  ],
+  dependencies: [
+    { from_step_id: "retrieve", to_step_id: "draft", kind: "data",
+      binding: { output_name: "refs", input_name: "evidence" } },
+  ],
+};
+
+const TOOL_CALLS = [
+  {
+    tool_call_id: "tc-1", tool_name: "compassrag", plan_id: "P1", step_id: "retrieve",
+    effect_class: "read_only", status: "indeterminate", outcome: "unknowable",
+    idempotency_key: "compassrag:demo/retrieve:abcdef1234567890",
+    args_fingerprint: "abc", retry_count: 0, reconcile_attempts: 1,
+    compensation_for: "", result: {}, error: {},
+    dispatched_at: "", settled_at: "",
+  },
+];
 
 function respond(body: unknown) {
   return {
@@ -65,6 +102,12 @@ beforeEach(() => {
       }
       return respond({ session_id: "session-42", state: "planning", request_id: "r", replayed: false });
     }
+    if (String(url).includes("/tool-calls/")) {
+      return respond({ ...TOOL_CALLS[0], status: "reconciled", outcome: "applied" });
+    }
+    if (String(url).includes("/tool-calls")) return respond({ session_id: "demo", tool_calls: TOOL_CALLS });
+    if (String(url).includes("/plans/P1")) return respond(PLAN_DETAIL);
+    if (String(url).includes("/plans")) return respond({ session_id: "demo", plans: PLANS });
     return String(url).includes("/report") ? respond(REPORT) : respond(TASK);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -130,6 +173,50 @@ describe("AtlasPage", () => {
     expect(screen.getByText(/compass-trace-1/)).toBeInTheDocument();
     const calls = fetchMock.mock.calls.map(([url]) => String(url));
     expect(calls.some((url) => url.includes("/atlas-api/tasks/demo/research"))).toBe(true);
+  });
+
+  it("显示计划与每个 Step 的状态", async () => {
+    render(<AtlasPage />);
+    expect(await screen.findByRole("heading", { name: "计划与步骤" })).toBeInTheDocument();
+    expect(screen.getByText("检索证据")).toBeInTheDocument();
+    expect(screen.getByText(/需人工/)).toBeInTheDocument();
+    expect(screen.getByText(/refs→evidence/)).toBeInTheDocument();
+  });
+
+  it("结果未知的工具调用给出对账按钮而不是重发", async () => {
+    render(<AtlasPage />);
+    expect(await screen.findByRole("heading", { name: "工具调用与对账" })).toBeInTheDocument();
+    expect(screen.getByText(/先对账，不要重发/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认已生效" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /重发/ })).toBeNull();
+  });
+
+  it("点对账按钮提交结论并刷新", async () => {
+    render(<AtlasPage />);
+    await screen.findByRole("heading", { name: "工具调用与对账" });
+    fireEvent.click(screen.getByRole("button", { name: "确认未生效" }));
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          init?.method === "POST" && String(url).includes("/tool-calls/tc-1/reconcile"),
+      );
+      expect(posts.length).toBe(1);
+      const body = JSON.parse(String((posts[0][1] as RequestInit).body));
+      expect(body.outcome).toBe("not_applied");
+    });
+  });
+
+  it("推进计划按钮调用 advance 并刷新", async () => {
+    render(<AtlasPage />);
+    await screen.findByRole("heading", { name: "计划与步骤" });
+    fireEvent.click(screen.getByRole("button", { name: /推进计划/ }));
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          init?.method === "POST" && String(url).includes("/plans/P1/advance"),
+      );
+      expect(posts.length).toBe(1);
+    });
   });
 
   it("创建任务后自动加载该会话", async () => {

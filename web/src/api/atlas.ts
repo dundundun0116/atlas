@@ -33,6 +33,8 @@ export interface AtlasTask {
   edges: { src: string; dst: string; type: string }[];
   checkpoint: Record<string, unknown> | null;
   provenance: Record<string, unknown>;
+  /** 这套会话跑的控制流：legacy_research_v1（固定三段式）或 plan_dag_v1（显式计划） */
+  workflow_version: string;
 }
 
 export interface AtlasReport {
@@ -171,4 +173,137 @@ export async function getAtlasReport(sessionId: string): Promise<AtlasReport> {
   return json<AtlasReport>(
     await fetch(`${BASE}/tasks/${encodeURIComponent(sessionId)}/report`),
   );
+}
+
+// --------------------------------------------------------------------------- //
+// 计划（plan_dag_v1）与工具调用：同一页要能看到"这一步做到哪、外部调用有没有结论"
+// --------------------------------------------------------------------------- //
+
+export interface AtlasStep {
+  step_id: string;
+  title: string;
+  kind: string;
+  status: string;
+  ordinal: number;
+  tool_name: string;
+  attempt_count: number;
+  status_reason: string;
+  stale_reason: string;
+}
+
+export interface AtlasDependency {
+  from_step_id: string;
+  to_step_id: string;
+  kind: string;
+  binding: Record<string, string>;
+}
+
+export interface AtlasPlan {
+  plan_id: string;
+  revision: number;
+  status: string;
+  summary: string;
+  strategy: string;
+  generated_by: string;
+  validator_version: string;
+  created_at: string;
+  activated_at: string;
+  validation: Record<string, unknown>;
+}
+
+export interface AtlasPlanDetail {
+  session_id: string;
+  plan: AtlasPlan;
+  steps: AtlasStep[];
+  dependencies: AtlasDependency[];
+}
+
+export interface AtlasPlanAdvanceResult {
+  session_id: string;
+  plan_id: string;
+  state: string;
+  workflow_version: string;
+  executed: string[];
+  needs_human: string[];
+  failed: string[];
+  recovered_in_flight: string[];
+  stopped_reason: string;
+  complete: boolean;
+  steps: AtlasStep[];
+}
+
+export interface AtlasToolCall {
+  tool_call_id: string;
+  tool_name: string;
+  plan_id: string;
+  step_id: string;
+  effect_class: string;
+  status: string;
+  outcome: string;
+  idempotency_key: string;
+  args_fingerprint: string;
+  retry_count: number;
+  reconcile_attempts: number;
+  compensation_for: string;
+  result: Record<string, unknown>;
+  error: Record<string, unknown>;
+  dispatched_at: string;
+  settled_at: string;
+}
+
+export async function getAtlasPlans(sessionId: string): Promise<AtlasPlan[]> {
+  const body = await json<{ session_id: string; plans: AtlasPlan[] }>(
+    await fetch(`${BASE}/tasks/${encodeURIComponent(sessionId)}/plans`),
+  );
+  return body.plans ?? [];
+}
+
+export async function getAtlasPlanDetail(
+  sessionId: string,
+  planId: string,
+): Promise<AtlasPlanDetail> {
+  return json<AtlasPlanDetail>(
+    await fetch(
+      `${BASE}/tasks/${encodeURIComponent(sessionId)}/plans/${encodeURIComponent(planId)}`,
+    ),
+  );
+}
+
+export async function advanceAtlasPlan(
+  sessionId: string,
+  planId: string,
+): Promise<AtlasPlanAdvanceResult> {
+  const res = await fetch(
+    `${BASE}/tasks/${encodeURIComponent(sessionId)}/plans/${encodeURIComponent(planId)}/advance`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ request_id: `req-${Date.now()}`, max_steps: 20 }),
+    },
+  );
+  return json<AtlasPlanAdvanceResult>(res);
+}
+
+export async function getAtlasToolCalls(sessionId: string): Promise<AtlasToolCall[]> {
+  const body = await json<{ session_id: string; tool_calls: AtlasToolCall[] }>(
+    await fetch(`${BASE}/tasks/${encodeURIComponent(sessionId)}/tool-calls`),
+  );
+  return body.tool_calls ?? [];
+}
+
+export async function reconcileAtlasToolCall(
+  sessionId: string,
+  toolCallId: string,
+  outcome: string,
+  detail = "工作台人工对账",
+): Promise<AtlasToolCall> {
+  const res = await fetch(
+    `${BASE}/tasks/${encodeURIComponent(sessionId)}/tool-calls/${encodeURIComponent(toolCallId)}/reconcile`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ outcome, detail, request_id: `req-${Date.now()}` }),
+    },
+  );
+  return json<AtlasToolCall>(res);
 }

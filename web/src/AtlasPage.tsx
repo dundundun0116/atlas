@@ -1,17 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  advanceAtlasPlan,
   advanceAtlasTask,
   createAtlasTask,
+  getAtlasPlanDetail,
+  getAtlasPlans,
   getAtlasReport,
   getAtlasTask,
+  getAtlasToolCalls,
   pauseAtlasTask,
+  reconcileAtlasToolCall,
   resumeAtlasTask,
   runAtlasOrchestration,
   runAtlasResearch,
   type AtlasEvidence,
   type AtlasNode,
+  type AtlasPlan,
+  type AtlasPlanDetail,
   type AtlasReport,
   type AtlasTask,
+  type AtlasToolCall,
   type OrchestrateResult,
   type ResearchCallResult,
 } from "./api/atlas";
@@ -27,6 +35,32 @@ function parseEvidence(raw: string): AtlasEvidence[] {
     return [];
   }
 }
+
+const STEP_LABELS: Record<string, string> = {
+  done: "✅ 完成",
+  failed: "❌ 失败",
+  needs_human: "🙋 需人工",
+  stale: "♻️ 已失效",
+  running: "▶️ 执行中",
+  dispatched: "📤 已派发",
+  verifying: "🔍 核验中",
+  blocked: "⛔ 依赖未满足",
+  pending: "⏳ 待调度",
+  ready: "🟢 可调度",
+  skipped: "⏭️ 跳过",
+};
+
+const TOOL_STATUS_LABELS: Record<string, string> = {
+  settled: "已结算",
+  failed_determinate: "确定失败",
+  failed_partial: "部分成功",
+  indeterminate: "结果未知",
+  reconciling: "对账中",
+  reconciled: "已对账",
+  compensating: "补偿中",
+  dispatched: "已派发",
+  proposed: "已登记意图",
+};
 
 const TRIGGER_LABELS: Record<string, string> = {
   plan_ready: "规划完成",
@@ -73,6 +107,9 @@ export default function AtlasPage() {
   const [orchestrating, setOrchestrating] = useState(false);
   const [task, setTask] = useState<AtlasTask | null>(null);
   const [report, setReport] = useState<AtlasReport | null>(null);
+  const [plans, setPlans] = useState<AtlasPlan[]>([]);
+  const [planDetail, setPlanDetail] = useState<AtlasPlanDetail | null>(null);
+  const [toolCalls, setToolCalls] = useState<AtlasToolCall[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -88,9 +125,23 @@ export default function AtlasPage() {
       ]);
       setTask(state);
       setReport(summary);
+      // 计划与工具调用是"可选的"：老会话没有计划层，取不到不该让整页报错
+      const [planList, calls] = await Promise.all([
+        getAtlasPlans(target).catch(() => [] as AtlasPlan[]),
+        getAtlasToolCalls(target).catch(() => [] as AtlasToolCall[]),
+      ]);
+      setPlans(planList);
+      setToolCalls(calls);
+      const active = planList.find((item) => item.status === "active") ?? planList.at(-1);
+      setPlanDetail(
+        active ? await getAtlasPlanDetail(target, active.plan_id).catch(() => null) : null,
+      );
     } catch (e) {
       setTask(null);
       setReport(null);
+      setPlans([]);
+      setPlanDetail(null);
+      setToolCalls([]);
       setError(String(e));
     } finally {
       setLoading(false);
@@ -141,6 +192,34 @@ export default function AtlasPage() {
       setOrchestrating(false);
     }
   }, [load, sessionId]);
+
+  const doAdvancePlan = useCallback(async () => {
+    if (!planDetail) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await advanceAtlasPlan(sessionId, planDetail.plan.plan_id);
+      await load(sessionId);
+    } catch (e) {
+      setError(String(e));
+      setLoading(false);
+    }
+  }, [load, planDetail, sessionId]);
+
+  const doReconcile = useCallback(
+    async (toolCallId: string, outcome: string) => {
+      setLoading(true);
+      setError(null);
+      try {
+        await reconcileAtlasToolCall(sessionId, toolCallId, outcome);
+        await load(sessionId);
+      } catch (e) {
+        setError(String(e));
+        setLoading(false);
+      }
+    },
+    [load, sessionId],
+  );
 
   const create = useCallback(async () => {
     const target = sessionId.trim();
@@ -239,6 +318,121 @@ export default function AtlasPage() {
               )}
             </div>
           </section>
+
+          {planDetail && (
+            <section className="panel">
+              <h2>计划与步骤</h2>
+              <p className="small muted">
+                计划 <code>{planDetail.plan.plan_id}</code> rev{planDetail.plan.revision}
+                {" · "}
+                {planDetail.plan.status}
+                {" · "}
+                {planDetail.plan.validator_version}
+                {" · "}
+                工作流 <code>{task.workflow_version || planDetail.plan.strategy}</code>
+              </p>
+              <table className="atlas-nodes">
+                <thead>
+                  <tr>
+                    <th>Step</th>
+                    <th>标题</th>
+                    <th>类型</th>
+                    <th>状态</th>
+                    <th>尝试</th>
+                    <th>说明</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {planDetail.steps.map((step) => (
+                    <tr key={step.step_id}>
+                      <td>
+                        <code>{step.step_id}</code>
+                      </td>
+                      <td>{step.title}</td>
+                      <td>{step.kind}</td>
+                      <td>{STEP_LABELS[step.status] ?? step.status}</td>
+                      <td>{step.attempt_count}</td>
+                      <td className="small muted">
+                        {step.status_reason || step.stale_reason || "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="small muted">
+                依赖：
+                {planDetail.dependencies.length === 0
+                  ? "无"
+                  : planDetail.dependencies
+                      .map(
+                        (dep) =>
+                          `${dep.from_step_id}→${dep.to_step_id}` +
+                          (dep.binding?.output_name
+                            ? `(${dep.binding.output_name}→${dep.binding.input_name})`
+                            : ""),
+                      )
+                      .join("、")}
+              </p>
+              {planDetail.plan.status === "active" && (
+                <button onClick={doAdvancePlan} disabled={loading}>
+                  {loading ? "推进中…" : "推进计划（跑可执行的 Step）"}
+                </button>
+              )}
+            </section>
+          )}
+
+          {toolCalls.length > 0 && (
+            <section className="panel">
+              <h2>工具调用与对账</h2>
+              <table className="atlas-nodes">
+                <thead>
+                  <tr>
+                    <th>工具</th>
+                    <th>Step</th>
+                    <th>状态</th>
+                    <th>结论</th>
+                    <th>重试</th>
+                    <th>对账</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {toolCalls.map((call) => (
+                    <tr key={call.tool_call_id}>
+                      <td>
+                        <code>{call.tool_name}</code>
+                      </td>
+                      <td>{call.step_id || "—"}</td>
+                      <td>
+                        {TOOL_STATUS_LABELS[call.status] ?? call.status}
+                        {call.status === "indeterminate" ? "（先对账，不要重发）" : ""}
+                      </td>
+                      <td>{call.outcome || "—"}</td>
+                      <td>{call.retry_count}</td>
+                      <td>{call.reconcile_attempts}</td>
+                      <td>
+                        {call.status === "indeterminate" ? (
+                          <span className="atlas-actions">
+                            <button onClick={() => doReconcile(call.tool_call_id, "applied")}>
+                              确认已生效
+                            </button>
+                            <button onClick={() => doReconcile(call.tool_call_id, "not_applied")}>
+                              确认未生效
+                            </button>
+                            <button onClick={() => doReconcile(call.tool_call_id, "unknowable")}>
+                              仍无法判断
+                            </button>
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
 
           <section className="panel">
             <h2>发起检索（Atlas → ResearchTool）</h2>
