@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   advanceAtlasPlan,
   advanceAtlasTask,
+  assessAtlasRecovery,
   createAtlasTask,
   getAtlasPlanDetail,
   getAtlasPlans,
@@ -12,11 +13,13 @@ import {
   reconcileAtlasToolCall,
   resumeAtlasTask,
   runAtlasOrchestration,
+  recoverAtlasPlan,
   runAtlasResearch,
   type AtlasEvidence,
   type AtlasNode,
   type AtlasPlan,
   type AtlasPlanDetail,
+  type AtlasRecovery,
   type AtlasReport,
   type AtlasTask,
   type AtlasToolCall,
@@ -110,6 +113,7 @@ export default function AtlasPage() {
   const [plans, setPlans] = useState<AtlasPlan[]>([]);
   const [planDetail, setPlanDetail] = useState<AtlasPlanDetail | null>(null);
   const [toolCalls, setToolCalls] = useState<AtlasToolCall[]>([]);
+  const [recovery, setRecovery] = useState<AtlasRecovery | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -133,8 +137,15 @@ export default function AtlasPage() {
       setPlans(planList);
       setToolCalls(calls);
       const active = planList.find((item) => item.status === "active") ?? planList.at(-1);
-      setPlanDetail(
-        active ? await getAtlasPlanDetail(target, active.plan_id).catch(() => null) : null,
+      const detail = active
+        ? await getAtlasPlanDetail(target, active.plan_id).catch(() => null)
+        : null;
+      setPlanDetail(detail);
+      // 只读评估：能不能接着跑、卡在哪（不动任何状态）
+      setRecovery(
+        detail && detail.plan.status === "active"
+          ? await assessAtlasRecovery(target, detail.plan.plan_id).catch(() => null)
+          : null,
       );
     } catch (e) {
       setTask(null);
@@ -142,6 +153,7 @@ export default function AtlasPage() {
       setPlans([]);
       setPlanDetail(null);
       setToolCalls([]);
+      setRecovery(null);
       setError(String(e));
     } finally {
       setLoading(false);
@@ -199,6 +211,19 @@ export default function AtlasPage() {
     setError(null);
     try {
       await advanceAtlasPlan(sessionId, planDetail.plan.plan_id);
+      await load(sessionId);
+    } catch (e) {
+      setError(String(e));
+      setLoading(false);
+    }
+  }, [load, planDetail, sessionId]);
+
+  const doRecover = useCallback(async () => {
+    if (!planDetail) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await recoverAtlasPlan(sessionId, planDetail.plan.plan_id);
       await load(sessionId);
     } catch (e) {
       setError(String(e));
@@ -378,6 +403,47 @@ export default function AtlasPage() {
                   {loading ? "推进中…" : "推进计划（跑可执行的 Step）"}
                 </button>
               )}
+            </section>
+          )}
+
+          {recovery && (
+            <section className="panel">
+              <h2>恢复</h2>
+              <p className="small muted">
+                动作 <code>{recovery.action}</code> · {recovery.reason}
+              </p>
+              <p className="small">
+                已完成 {recovery.done_steps.length} · 待推进{" "}
+                {recovery.pending_steps.length + recovery.dispatched_steps.length} · 失效{" "}
+                {recovery.stale_steps.length} · 需人工 {recovery.needs_human_steps.length} · 在途调用{" "}
+                {recovery.in_flight_tool_calls.length}
+              </p>
+              {recovery.in_flight_tool_calls.length > 0 && (
+                <p className="error">
+                  有 {recovery.in_flight_tool_calls.length} 个工具调用结果未知——先在上面的
+                  「工具调用与对账」里定论，才能恢复（重复发可能造成重复副作用）。
+                </p>
+              )}
+              {recovery.needs_human_steps.length > 0 && (
+                <p className="small muted">
+                  需要人工确认：{recovery.needs_human_steps.join("、")}
+                </p>
+              )}
+              {recovery.stale_steps.length > 0 && (
+                <p className="small muted">
+                  已失效、需要重新绑定输入：{recovery.stale_steps.join("、")}
+                </p>
+              )}
+              <button
+                onClick={doRecover}
+                disabled={loading || recovery.blocked || recovery.action === "nothing_to_do"}
+              >
+                {recovery.blocked
+                  ? "当前不能自动恢复"
+                  : recovery.action === "nothing_to_do"
+                    ? "没有可恢复的工作"
+                    : "恢复并继续"}
+              </button>
             </section>
           )}
 

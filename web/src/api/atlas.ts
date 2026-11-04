@@ -307,3 +307,53 @@ export async function reconcileAtlasToolCall(
   );
   return json<AtlasToolCall>(res);
 }
+
+export interface AtlasRecovery {
+  session_id: string;
+  plan_id: string;
+  plan_status: string;
+  action: string;          // resume / blocked_on_reconcile / blocked_on_human / nothing_to_do
+  blocked: boolean;
+  reason: string;
+  in_flight_tool_calls: {
+    tool_call_id: string; tool_name: string; step_id: string;
+    status: string; outcome: string;
+  }[];
+  pending_steps: string[];
+  dispatched_steps: string[];
+  stale_steps: string[];
+  needs_human_steps: string[];
+  failed_steps: string[];
+  done_steps: string[];
+  executed: string[];
+  recovered_in_flight: string[];
+  stopped_reason: string;
+  complete: boolean;
+  state: string;
+}
+
+async function _recover(
+  sessionId: string,
+  planId: string,
+  dryRun: boolean,
+): Promise<AtlasRecovery> {
+  const res = await fetch(
+    `${BASE}/tasks/${encodeURIComponent(sessionId)}/plans/${encodeURIComponent(planId)}/recover`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ dry_run: dryRun, request_id: `req-${Date.now()}` }),
+    },
+  );
+  return json<AtlasRecovery>(res);
+}
+
+/** 只读评估：回答"能不能接着跑、卡在哪"，不动任何状态。 */
+export function assessAtlasRecovery(sessionId: string, planId: string): Promise<AtlasRecovery> {
+  return _recover(sessionId, planId, true);
+}
+
+/** 真恢复：只在没有在途未知调用时才真的续跑。 */
+export function recoverAtlasPlan(sessionId: string, planId: string): Promise<AtlasRecovery> {
+  return _recover(sessionId, planId, false);
+}

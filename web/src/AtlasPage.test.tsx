@@ -59,6 +59,28 @@ const PLAN_DETAIL = {
   ],
 };
 
+const RECOVERY = {
+  session_id: "demo", plan_id: "P1", plan_status: "active",
+  action: "resume", blocked: false,
+  reason: "可以接着跑：只补未提交的那一步与未完成的 Step",
+  in_flight_tool_calls: [], pending_steps: ["draft", "verify"],
+  dispatched_steps: [], stale_steps: [], needs_human_steps: [],
+  failed_steps: [], done_steps: ["retrieve"],
+  executed: [], recovered_in_flight: [], stopped_reason: "", complete: false,
+  state: "planning",
+};
+
+const RECOVERY_BLOCKED = {
+  ...RECOVERY,
+  action: "blocked_on_reconcile",
+  blocked: true,
+  reason: "1 个工具调用结果未知，必须先对账（重复发可能造成重复副作用）",
+  in_flight_tool_calls: [
+    { tool_call_id: "tc-1", tool_name: "compassrag", step_id: "retrieve",
+      status: "indeterminate", outcome: "unknowable" },
+  ],
+};
+
 const TOOL_CALLS = [
   {
     tool_call_id: "tc-1", tool_name: "compassrag", plan_id: "P1", step_id: "retrieve",
@@ -83,6 +105,11 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).includes("/recover")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      if (body.dry_run) return respond(RECOVERY);
+      return respond({ ...RECOVERY, executed: ["draft", "verify"], complete: true });
+    }
     if (init?.method === "POST") {
       if (String(url).includes("/orchestrate")) {
         return respond({
@@ -179,7 +206,7 @@ describe("AtlasPage", () => {
     render(<AtlasPage />);
     expect(await screen.findByRole("heading", { name: "计划与步骤" })).toBeInTheDocument();
     expect(screen.getByText("检索证据")).toBeInTheDocument();
-    expect(screen.getByText(/需人工/)).toBeInTheDocument();
+    expect(screen.getAllByText(/需人工/).length).toBeGreaterThan(0);
     expect(screen.getByText(/refs→evidence/)).toBeInTheDocument();
   });
 
@@ -219,15 +246,60 @@ describe("AtlasPage", () => {
     });
   });
 
+  it("显示恢复评估：能接着跑时给恢复按钮", async () => {
+    render(<AtlasPage />);
+    expect(await screen.findByRole("heading", { name: "恢复" })).toBeInTheDocument();
+    expect(screen.getByText(/可以接着跑/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "恢复并继续" })).toBeEnabled();
+  });
+
+  it("有在途未知调用时恢复按钮被禁用并说明原因", async () => {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/recover")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        return respond(body.dry_run ? RECOVERY_BLOCKED : RECOVERY_BLOCKED);
+      }
+      if (String(url).includes("/tool-calls")) {
+        return respond({ session_id: "demo", tool_calls: TOOL_CALLS });
+      }
+      if (String(url).includes("/plans/P1")) return respond(PLAN_DETAIL);
+      if (String(url).includes("/plans")) return respond({ session_id: "demo", plans: PLANS });
+      return String(url).includes("/report") ? respond(REPORT) : respond(TASK);
+    });
+    render(<AtlasPage />);
+    await screen.findByRole("heading", { name: "恢复" });
+    expect(screen.getByText(/先在上面的/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "当前不能自动恢复" })).toBeDisabled();
+  });
+
+  it("点恢复按钮调用 recover 并刷新", async () => {
+    render(<AtlasPage />);
+    await screen.findByRole("heading", { name: "恢复" });
+    fireEvent.click(screen.getByRole("button", { name: "恢复并继续" }));
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          init?.method === "POST" && String(url).includes("/plans/P1/recover"),
+      );
+      const real = posts.filter(([, init]) => {
+        const body = JSON.parse(String((init as RequestInit).body));
+        return body.dry_run === false;
+      });
+      expect(real.length).toBe(1);
+    });
+  });
+
   it("创建任务后自动加载该会话", async () => {
     render(<AtlasPage />);
     await screen.findByText(/爱因斯坦出生于哪一年/);
     fireEvent.change(screen.getByLabelText("会话 ID"), { target: { value: "new-session" } });
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
     await waitFor(() => {
-      const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
-      expect(posts.length).toBe(1);
-      expect(String(posts[0][0])).toContain("/atlas-api/tasks");
+      const creates = fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          init?.method === "POST" && String(url).endsWith("/atlas-api/tasks"),
+      );
+      expect(creates.length).toBe(1);
     });
   });
 });
