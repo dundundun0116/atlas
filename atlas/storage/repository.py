@@ -677,6 +677,17 @@ class GraphRepository:
             )
         return self.get_tool_call(session_id, compensation_id)
 
+    def link_compensation(self, session_id: str, tool_call_id: str,
+                          original_call_id: str) -> None:
+        """把一条调用标记为某条原调用的补偿（`compensation_for` 指针）。"""
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            row = session.get(ToolCallRow, tool_call_id)
+            if row is None:
+                raise KeyError(f"工具调用不存在：{tool_call_id}")
+            row.compensation_for = original_call_id
+            row.updated_at = _now()
+
     def tool_calls(self, session_id: str, *, plan_id: str = "",
                    step_id: str = "", status: str = "") -> List[Dict[str, Any]]:
         with self._tx() as session:

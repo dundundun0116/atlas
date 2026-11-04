@@ -26,6 +26,9 @@ from atlas.tools.calls import (
 #: 这些工具错误说明"请求压根没被受理"，可以安全重试。
 _DETERMINATE_ERRORS = ("invalid_request", "no_evidence", "budget_exhausted")
 
+#: 这些说明"动作部分生效"——不能重试，只能补偿或人工。
+_PARTIAL_ERRORS = ("partial", "partial_apply", "partially_applied")
+
 #: 这些说明"已经发出去了，结果不知道"——必须走对账，不能重发。
 _UNKNOWN_ERRORS = ("timeout", "upstream_error", "unknown_commit")
 
@@ -54,6 +57,11 @@ class CallOutcome:
     @property
     def retryable(self) -> bool:
         return self.status is ToolCallStatus.FAILED_DETERMINATE
+
+    @property
+    def needs_compensation(self) -> bool:
+        """部分生效：只能补偿，不能重试。"""
+        return self.status is ToolCallStatus.FAILED_PARTIAL
 
     def to_step_status(self) -> str:
         """映射到 Step 执行器要的状态字符串（runner 再按判据继续处理）。"""
@@ -187,6 +195,15 @@ class ToolDispatcher:
     def _settle_error(self, tool_call_id: str, exc: BaseException) -> CallOutcome:
         kind = str(getattr(exc, "kind", "") or "exception")
         message = str(getattr(exc, "message", "") or exc)
+        if kind in _PARTIAL_ERRORS:
+            # 部分生效：既不能当成功，也不能直接重试（会重复那一半副作用）
+            record = self.repository.settle_tool_call(
+                self.session_id, tool_call_id,
+                status=ToolCallStatus.FAILED_PARTIAL.value,
+                outcome=Outcome.PARTIALLY_APPLIED.value,
+                error={"kind": "partial", "message": message}, actor=self.actor,
+            )
+            return self._from_record(record)
         if kind in _DETERMINATE_ERRORS:
             record = self.repository.settle_tool_call(
                 self.session_id, tool_call_id,
