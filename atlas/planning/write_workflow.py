@@ -39,6 +39,7 @@ def build_write_plan(
     value: Dict[str, Any],
     tool_name: str = "demo_writer",
     with_prepare: bool = False,
+    expect_absent: bool = False,
 ) -> PlanSpec:
     """生成"写入 → 读回确认"的两步计划（可选前置 prepare）。"""
     target = str(target or "").strip()
@@ -69,6 +70,10 @@ def build_write_plan(
         kind=StepKind.TOOL,
         tool_name=tool_name,
         ordinal=20,
+        # 派发前复查：默认不要求目标不存在（重复写同一对象是合法场景）；
+        # `expect_absent=True` 时把它变成硬前置条件——已经存在就**不派发**。
+        tool_args_template={"precondition": {"target": target, "kind": "absent"}}
+        if expect_absent else {},
         inputs=[InputBinding(name="target", source_kind="literal")],
         outputs=[OutputSpec(name="target", schema={"type": "string"}),
                  OutputSpec(name="applied", schema={"type": "object"}),
@@ -86,6 +91,8 @@ def build_write_plan(
         kind=StepKind.VERIFY,
         tool_name=tool_name,
         ordinal=30,
+        # 后置条件：计划时就钉住"应该读回什么"，confirmation 不靠自报
+        tool_args_template={"target": target, "expect": dict(value or {})},
         inputs=[InputBinding(name="target", source_kind="step_output",
                              expected_schema={"type": "string"})],
         outputs=[OutputSpec(name="confirmed", schema={"type": "boolean"})],

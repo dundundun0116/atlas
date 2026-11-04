@@ -20,16 +20,22 @@ from atlas.tools.writes import ControllableWriteTool, WriteToolError
 VALUE = {"amount": 100, "currency": "CNY"}
 
 
-def _plan_payload(target="order-1", value=None, approved=None):
-    payload = build_write_plan(target=target, value=value or VALUE).to_dict()
+def _plan_payload(target="order-1", value=None, approved=None, expect_absent=False):
+    payload = build_write_plan(target=target, value=value or VALUE,
+                               expect_absent=expect_absent).to_dict()
     for step in payload["steps"]:
         if step["step_id"] == "write":
-            step["tool_args_template"] = {"target": target, "value": dict(value or VALUE)}
+            # 保留计划里已经声明的参数（例如前置条件），只补执行需要的
+            template = dict(step.get("tool_args_template") or {})
+            template.update({"target": target, "value": dict(value or VALUE)})
+            step["tool_args_template"] = template
             if approved is not None:
                 # 不可补偿的副作用要先批准才能派发；替身可补偿，平时不用设
                 step["tool_args_template"]["approved"] = approved
         if step["step_id"] == "confirm":
-            step["tool_args_template"] = {"target": target}
+            # 后置条件：读回必须包含写进去的字段
+            step["tool_args_template"] = {"target": target,
+                                          "expect": dict(value or VALUE)}
     return payload
 
 
@@ -48,10 +54,11 @@ def _client(db, tool=None):
     ))
 
 
-def _run(client, target="order-1", approved=None):
+def _run(client, target="order-1", approved=None, expect_absent=False):
     client.post("/tasks", json={"session_id": "s1", "goal": "写入"})
     submitted = client.post("/tasks/s1/plans",
-                            json={"plan": _plan_payload(target, approved=approved),
+                            json={"plan": _plan_payload(target, approved=approved,
+                                                        expect_absent=expect_absent),
                                   "activate": True}).json()
     plan_id = submitted["plan"]["plan_id"]
     body = client.post(f"/tasks/s1/plans/{plan_id}/advance", json={}).json()
@@ -185,3 +192,52 @@ class TestGuards:
         assert "UNKNOWN_OUTPUT_BINDING" in [
             item["code"] for item in body["plan"]["validation"]["issues"]
         ]
+
+
+class TestPreAndPostconditions:
+    """§11 Phase 4：派发前复查外部世界，执行后读回比对。"""
+
+    def test_precondition_violated_blocks_dispatch(self, db):
+        tool = ControllableWriteTool(mode="ok")
+        tool.world["order-1"] = {"amount": 999}      # 计划时它还不存在
+        client = _client(db, tool)
+        _, body = _run(client, expect_absent=True)
+        statuses = {step["step_id"]: step["status"] for step in body["steps"]}
+        assert statuses["write"] == "failed"
+        # 关键：**一次写入都没发出去**——不是写完再发现冲突
+        # （`observe` 是复查本身，允许；不许出现的是 write）
+        assert not any(op.startswith("write:") for op in tool.operations)
+        assert "observe:order-1" in tool.operations
+        calls = GraphRepository(db).tool_calls("s1")
+        assert calls == [], "前置条件不满足时不该产生工具调用"
+
+    def test_precondition_unknown_goes_human(self, db):
+        tool = ControllableWriteTool(mode="ok")
+
+        def broken_observe(key):
+            raise WriteToolError("timeout", "读不回来")
+
+        tool.observe = broken_observe
+        client = _client(db, tool)
+        _, body = _run(client, expect_absent=True)
+        statuses = {step["step_id"]: step["status"] for step in body["steps"]}
+        # 判不了 ≠ 满足：转人工，不许硬写
+        assert statuses["write"] == "needs_human"
+        assert tool.operations == [], "读不回时连写都不该尝试"
+
+    def test_confirm_compares_written_fields(self, db):
+        tool = ControllableWriteTool(mode="ok")
+        original_write = tool.write
+
+        def write_something_else(key, value):
+            # 服务端写进去了别的值（例如被另一方覆盖）：读回对不上就不能算成功
+            tool.world[key] = {"amount": 1}
+            return {"applied": dict(value)}
+
+        tool.write = write_something_else
+        client = _client(db, tool)
+        _, body = _run(client)
+        statuses = {step["step_id"]: step["status"] for step in body["steps"]}
+        assert statuses["write"] == "done"
+        assert statuses["confirm"] == "failed", "读回字段对不上就不能确认"
+        tool.write = original_write

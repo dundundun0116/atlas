@@ -14,6 +14,12 @@ import json
 from typing import Any, Callable, Dict, List, Optional
 
 from atlas.context.extractor import parse_json_object
+from atlas.environment.preconditions import (
+    check_postcondition,
+    check_precondition,
+    observations_for,
+    preconditions_from_payload,
+)
 from atlas.orchestration.policies import Budget, policy_for
 from atlas.orchestration.orchestrator import (
     AUDITOR_PROMPT,
@@ -235,6 +241,19 @@ class ResearchStepExecutor:
             effect_class=EffectClass.EXTERNAL_SIDE_EFFECT,
             supports_idempotency=True, supports_lookup=True, supports_compensation=True,
         )
+        # 派发**之前**的复查：计划是在某一刻对世界做的断言，等到真要派发时世界可能已变。
+        # 不复查就只能等 confirm 读回才发现——那时候副作用已经发出去了。
+        precheck = self._precheck(step, target)
+        if precheck is not None and precheck.get("passed") is not True:
+            blocked = "violated" if precheck.get("passed") is False else "unknown"
+            return StepOutcome(
+                status="failed" if blocked == "violated" else "needs_human",
+                output={"target": target, "applied_ok": False, "compensated": False,
+                        "precheck": precheck},
+                error={"kind": f"precondition_{blocked}",
+                       "message": precheck.get("reason", "")},
+            )
+
         # 派发**之前**的闸门：副作用不可补偿的工具，出事之后只能靠人收拾，
         # 所以必须先让人点头，而不是"先写了再说"。`approved` 只能来自计划本身
         # （tool_args_template）或显式输入——执行器不替人拍板。
@@ -300,6 +319,39 @@ class ResearchStepExecutor:
         return StepOutcome(status="failed", output=output,
                            error=dict(outcome.error or {}))
 
+    def _precheck(self, step, target: str) -> Optional[Dict[str, Any]]:
+        """派发前复查外部世界；没有前置条件、或工具读不回，就返回 None（不拦）。
+
+        三态语义与 `check_precondition` 一致：满足才放行；不满足是**确定失败**；
+        观察过期/读不回是**判不了**，转人工——绝不能当成满足。
+        """
+        spec_conditions = preconditions_from_payload(step.tool_args_template)
+        if not spec_conditions:
+            return None
+        observe = getattr(self.write_tool, "observe", None)
+        if observe is None:
+            return None
+        try:
+            observed = observe(target)
+        except Exception as exc:  # noqa: BLE001 - 读不回就是判不了
+            return {"passed": None, "observe_needed": True,
+                    "reason": f"读回失败，无法复查前置条件：{exc}"}
+        snapshot = observations_for({target: observed})
+        failures = []
+        for condition in spec_conditions:
+            result = check_precondition(condition, snapshot, ttl_s=0)
+            if result.passed is not True:
+                failures.append({"condition": condition.to_dict(),
+                                 "result": result.to_dict()})
+        if not failures:
+            return {"passed": True, "reason": "前置条件满足",
+                    "observed_fingerprint": snapshot.get(target).fingerprint
+                    if snapshot.get(target) else ""}
+        passed = False if any(item["result"]["passed"] is False for item in failures) \
+            else None
+        return {"passed": passed, "failures": failures,
+                "reason": failures[0]["result"]["reason"]}
+
     def _do_confirm(self, step, inputs: Dict[str, Any], scope: Dict[str, Any] = None) -> StepOutcome:
         """读回目标对象：确认外部世界真的变了，而不是相信 write 的返回值。"""
         if self.write_tool is None:
@@ -309,6 +361,7 @@ class ResearchStepExecutor:
         if not target:
             return StepOutcome(status="failed", error={
                 "kind": "invalid_request", "message": "confirm 步缺少 target"})
+        expected = inputs.get("expected") or (step.tool_args_template or {}).get("expect")
         try:
             observed = self.write_tool.observe(target)
         except Exception as exc:  # noqa: BLE001 - 读不回 ≠ 没写成
@@ -320,11 +373,25 @@ class ResearchStepExecutor:
                 error={"kind": getattr(exc, "kind", "unknown_commit"),
                        "message": f"读回失败，无法确认外部状态：{exc}"},
             )
-        return StepOutcome(output={
+        if observed is None:
+            return StepOutcome(output={"target": target, "observed": None,
+                                       "confirmed": False,
+                                       "reason": "读回为空：外部对象不存在"})
+        # 后置条件：读回必须**包含**我们写进去的字段（子集比对）。
+        # 逐字段相等会把服务端补的 updated_at/version 当成失败——那是假阴性。
+        post = check_postcondition(expected, observed) if isinstance(expected, dict) \
+            else None
+        confirmed = True if post is None else bool(post.confirmed)
+        output = {
             "target": target,
-            "observed": dict(observed or {}) if observed else None,
-            "confirmed": observed is not None,
-        })
+            "observed": dict(observed),
+            "confirmed": confirmed,
+        }
+        if post is not None:
+            output["postcondition"] = post.to_dict()
+            if not confirmed:
+                output["reason"] = post.reason
+        return StepOutcome(output=output)
 
     # ---------- 内部 ----------
 
