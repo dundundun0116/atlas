@@ -19,9 +19,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from atlas.memory.engine import GraphMemoryEngine
 from atlas.memory.schema import LEGAL_EDGES, EdgeType, NodeStatus, NodeType
 from atlas.storage import events as ev
+from atlas.storage import migrations
 from atlas.storage.models import (
+    LEGACY_WORKFLOW_VERSION,
     Base,
     CheckpointRow,
+    ContextPackageRow,
     EdgeRow,
     EventRow,
     NodeRow,
@@ -47,6 +50,8 @@ class Database:
             bind=self.engine, expire_on_commit=False, future=True
         )
         Base.metadata.create_all(self.engine)
+        # create_all 只建缺失的表；既有表缺列要在这里补（见 storage/migrations.py）。
+        self.migration_report = migrations.ensure_schema(self.engine)
 
     @staticmethod
     def _sqlite_pragmas(dbapi_connection, _record) -> None:
@@ -86,12 +91,22 @@ class GraphRepository:
     # ---------- 会话 ----------
 
     def create_session(
-        self, session_id: str, goal: str = "", actor: str = "main"
+        self,
+        session_id: str,
+        goal: str = "",
+        actor: str = "main",
+        *,
+        workflow_version: str = LEGACY_WORKFLOW_VERSION,
     ) -> SessionRow:
         with self._tx() as session:
             row = session.get(SessionRow, session_id)
             if row is None:
-                row = SessionRow(session_id=session_id, goal=goal, actor=actor)
+                row = SessionRow(
+                    session_id=session_id,
+                    goal=goal,
+                    actor=actor,
+                    workflow_version=workflow_version,
+                )
                 session.add(row)
                 session.flush()
             return row
@@ -99,6 +114,11 @@ class GraphRepository:
     def get_session(self, session_id: str) -> Optional[SessionRow]:
         with self._tx() as session:
             return session.get(SessionRow, session_id)
+
+    def workflow_version(self, session_id: str) -> str:
+        """这个会话的控制流版本；库不存在时返回空串（不猜）。"""
+        row = self.get_session(session_id)
+        return str(getattr(row, "workflow_version", "") or "") if row is not None else ""
 
     def session_count(self) -> int:
         with self._tx() as session:
@@ -452,6 +472,61 @@ class GraphRepository:
                 .order_by(EventRow.seq)
             ).all()
             return [dict(row.payload or {}) for row in rows]
+
+    # ---------- 上下文包（ContextPackage 下钻用） ----------
+
+    def save_context_package(
+        self, session_id: str, package: Dict[str, Any]
+    ) -> ContextPackageRow:
+        """落一次模型调用的上下文包指纹（不存正文，正文可重放）。"""
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            row = ContextPackageRow(
+                context_id=str(package.get("context_id") or uuid4()),
+                session_id=session_id,
+                role=str(package.get("role") or ""),
+                state_version=int(package.get("state_version") or 0),
+                budget_tokens=int(package.get("budget_tokens") or 0),
+                actual_tokens=int(package.get("actual_tokens") or 0),
+                digest=str(package.get("digest") or ""),
+                tokenizer=str(package.get("tokenizer") or ""),
+                sections=dict(package.get("sections") or {}),
+                included_refs=list(package.get("included_refs") or []),
+                excluded_refs=list(package.get("excluded_refs") or []),
+                warnings=list(package.get("warnings") or []),
+                degraded=bool(package.get("degraded")),
+                created_at=str(package.get("created_at") or _now()),
+            )
+            session.add(row)
+            session.flush()
+            return row
+
+    def context_packages(self, session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        with self._tx() as session:
+            rows = session.scalars(
+                select(ContextPackageRow)
+                .where(ContextPackageRow.session_id == session_id)
+                .order_by(ContextPackageRow.id)
+            ).all()
+            selected = rows[-limit:] if limit and limit > 0 else rows
+            return [
+                {
+                    "context_id": row.context_id,
+                    "role": row.role,
+                    "state_version": row.state_version,
+                    "budget_tokens": row.budget_tokens,
+                    "actual_tokens": row.actual_tokens,
+                    "digest": row.digest,
+                    "tokenizer": row.tokenizer,
+                    "sections": dict(row.sections or {}),
+                    "included_refs": list(row.included_refs or []),
+                    "excluded_refs": list(row.excluded_refs or []),
+                    "warnings": list(row.warnings or []),
+                    "degraded": bool(row.degraded),
+                    "created_at": row.created_at,
+                }
+                for row in selected
+            ]
 
     # ---------- 镜像（评测接入用） ----------
 

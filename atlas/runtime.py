@@ -114,6 +114,8 @@ class AgentRuntime:
         def produce() -> Dict[str, Any]:
             runtime = self._load(session_id)
             tracer = self._tracer(session_id)
+            # 每次推进前先按时间规则作废过期状态：模型看不到的"旧值"不能继续被引用。
+            runtime.expire_overdue()
             try:
                 runtime.machine.apply(trigger, reason)
             except IllegalTransition as exc:
@@ -190,6 +192,17 @@ class AgentRuntime:
 
     # ---------- 读 ----------
 
+    def expire_due_nodes(self, session_id: str, *, now=None,
+                         actor: str = "clock") -> List[str]:
+        """按**时间规则**作废过期状态（`valid_until` 已过）。
+
+        这是 `repository.expire()` 的真实调用点：没有它，`expire` 只是一段没人用的代码，
+        "状态有效期"就退化成"带时间戳的图"。返回本次实际作废的节点 id。
+        """
+        self._load(session_id)
+        runtime = ServiceRuntime(self.repository, session_id, actor=actor)
+        return runtime.expire_overdue(now=now)
+
     def get_state(self, session_id: str) -> Dict[str, Any]:
         runtime = self._load(session_id)
         row = self.repository.get_session(session_id)
@@ -206,6 +219,7 @@ class AgentRuntime:
             "allowed_triggers": (
                 allowed_triggers(runtime.machine.state) if runtime.machine is not None else []
             ),
+            "workflow_version": view.get("workflow_version", ""),
             "nodes": [
                 {
                     "id": n.id, "type": n.type.value, "status": n.status.value,

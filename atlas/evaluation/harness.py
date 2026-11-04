@@ -61,8 +61,10 @@ class RunResult:
     context_tokens: int = 0
     model_calls: int = 0
     latency_ms: float = 0.0
+    #: 指标来源：默认是按 token 数估算的 synthetic_estimate；真实测量后改成 measured。
     latency_source: str = "synthetic_estimate"
     cost_usd: float = 0.0
+    cost_source: str = "synthetic_estimate"
 
     # ---------- 汇总口径 ----------
 

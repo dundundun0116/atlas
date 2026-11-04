@@ -37,8 +37,8 @@ fixture 是纯数据且带 `validate()`，因此任务集固定、可版本化�
 | 完成率 | 整条任务终态是否完成（不是子任务平均） |
 | 约束违规率 | 该 run 中出现任意一步违规即计 1（保守口径） |
 | 过期信息误用率 | 旧值出现在某一行且该行无"作废/修订"标记，即计 1 |
-| 恢复成功率 | 被中断的 run 中恢复并完成的占比；无中断时记 1.0 并单列 `interrupted_runs` |
-| 上下文 token / 调用次数 / 延迟 / 成本 | token 按实际发送 prompt 计数；离线 harness 的延迟是 `synthetic_estimate`，不代表 API 实测；成本仍是按假定单价估算 |
+| 恢复成功率 | 被中断的 run 中恢复并完成的占比；**没有故障注入样本时返回 `null`（表里显示 `—`）**，不再记 1.0，并单列 `interrupted_runs` |
+| 上下文 token / 调用次数 / 延迟 / 成本 | token 按实际发送 prompt 计数；离线 harness 的延迟是 `synthetic_estimate`，不代表 API 实测；成本仍是按假定单价估算。`aggregate()` 同时返回 `latency_source` / `cost_source`，表尾会标注估算口径 |
 
 指标定义写在 `atlas/evaluation/metrics.py::REQUIRED_METRICS`，改变口径必须同时改这里。
 

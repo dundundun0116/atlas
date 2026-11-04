@@ -92,6 +92,10 @@ class OrchestrateView(BaseModel):
     fact_ids: List[str] = Field(default_factory=list)
     research_trace_id: str = ""
     research_error: Optional[Dict[str, Any]] = None
+    #: 每个模型调用实际使用的上下文指纹（与 /contexts 一一对应）。
+    context_digests: List[str] = Field(default_factory=list)
+    retries: int = 0
+    workflow_version: str = ""
 
 
 class ResearchCallView(BaseModel):
@@ -146,6 +150,8 @@ class TaskStateView(BaseModel):
     edges: List[EdgeView] = Field(default_factory=list)
     checkpoint: Optional[CheckpointView] = None
     provenance: Dict[str, Any] = Field(default_factory=dict)
+    #: 这个会话跑的是哪套控制流（当前 `/orchestrate` 是 legacy_research_v1，不是 DAG）
+    workflow_version: str = ""
 
 
 class AdvanceView(BaseModel):
@@ -171,6 +177,34 @@ class TraceEventView(BaseModel):
     outcome: str = "ok"
     stop_reason: str = ""
     created_at: str = ""
+    #: 这一次调用使用的上下文指纹（可到 /contexts 下钻到包含/排除了哪些状态）
+    context_digest: str = ""
+    context_tokens: int = 0
+    usage_known: bool = False
+    error: str = ""
+
+
+class ContextPackageView(BaseModel):
+    """一次模型调用实际看到的上下文包（不存正文，正文可重放）。"""
+
+    context_id: str
+    role: str = ""
+    state_version: int = 0
+    budget_tokens: int = 0
+    actual_tokens: int = 0
+    digest: str = ""
+    tokenizer: str = ""
+    sections: Dict[str, int] = Field(default_factory=dict)
+    included_refs: List[str] = Field(default_factory=list)
+    excluded_refs: List[Dict[str, str]] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    degraded: bool = False
+    created_at: str = ""
+
+
+class ContextPackageListView(BaseModel):
+    session_id: str
+    packages: List[ContextPackageView] = Field(default_factory=list)
 
 
 class TraceView(BaseModel):

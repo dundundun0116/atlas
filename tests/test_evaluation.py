@@ -173,8 +173,26 @@ class TestMetrics:
         metrics = aggregate([completed, failed])
         assert metrics["n"] == 2
         assert metrics["completion_rate"] == 0.5
-        assert metrics["recovery_success_rate"] == 1.0
+        # 没有故障注入样本 ⇒ null，而不是"恢复成功率 100%"（设计文档 §10.3）
+        assert metrics["recovery_success_rate"] is None
         assert metrics["interrupted_runs"] == 0
+        assert metrics["latency_source"] == "synthetic_estimate"
+        assert metrics["cost_source"] == "synthetic_estimate"
+
+    def test_recovery_rate_is_computed_only_with_injected_faults(self):
+        interrupted = RunResult(task_id="a", family="f", policy="p", completed=True,
+                                interrupted=True, recovered=True)
+        failed_recovery = RunResult(task_id="b", family="f", policy="p", completed=False,
+                                    interrupted=True, recovered=False)
+        metrics = aggregate([interrupted, failed_recovery])
+        assert metrics["interrupted_runs"] == 2
+        assert metrics["recovery_success_rate"] == 0.5
+
+    def test_table_shows_null_rate_as_dash_and_marks_estimates(self, by_policy):
+        table = render_table(by_policy, "按策略")
+        assert "| — |" in table  # 无样本的恢复成功率显示为 —
+        assert "synthetic_estimate" in table  # 估算来源如实标注
+        assert "不是实测值" in table
 
     def test_table_has_quality_reliability_context_cost_columns(self, by_policy):
         table = render_table(by_policy, "按策略")

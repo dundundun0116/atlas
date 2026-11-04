@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     Float,
     ForeignKey,
     Index,
@@ -22,6 +23,11 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+#: 现有 `/orchestrate` 路径的显式工作流版本。它不是 DAG：只有一个固定的
+#: Planner→Worker→Auditor 控制流，没有持久化的 Plan/Step/Dependency。恢复旧
+#: checkpoint 时按这个值区分「legacy 流程」与将来的 DAG 流程，不伪造计划数据。
+LEGACY_WORKFLOW_VERSION = "legacy_research_v1"
 
 
 def _now() -> str:
@@ -42,6 +48,10 @@ class SessionRow(Base):
     actor: Mapped[str] = mapped_column(String(32), default="main")
     state: Mapped[str] = mapped_column(String(24), default="active")
     graph_version: Mapped[int] = mapped_column(Integer, default=0)
+    # 这个会话跑的是哪套控制流。恢复时据此决定能不能按 DAG 语义继续。
+    workflow_version: Mapped[str] = mapped_column(
+        String(32), default=LEGACY_WORKFLOW_VERSION
+    )
     created_at: Mapped[str] = mapped_column(String(32), default=_now)
     updated_at: Mapped[str] = mapped_column(String(32), default=_now)
 
@@ -157,4 +167,35 @@ class RunMetricRow(Base):
     latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     outcome: Mapped[str] = mapped_column(String(24), default="ok")
+    created_at: Mapped[str] = mapped_column(String(32), default=_now)
+
+
+class ContextPackageRow(Base):
+    """一次模型调用实际看到的上下文包（可复盘「它当时看到了什么」）。
+
+    只存 digest、分区 token 数、包含/排除的引用和降级原因，**不存上下文正文**：
+    正文可由「同一图快照 + 同一预算」重放得到，存全文会把状态库变成日志库。
+    """
+
+    __tablename__ = "context_packages"
+    __table_args__ = (
+        Index("ix_context_packages_session", "session_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    context_id: Mapped[str] = mapped_column(String(36), unique=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("sessions.session_id", ondelete="CASCADE")
+    )
+    role: Mapped[str] = mapped_column(String(32), default="")
+    state_version: Mapped[int] = mapped_column(Integer, default=0)
+    budget_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    actual_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    digest: Mapped[str] = mapped_column(String(64), default="")
+    tokenizer: Mapped[str] = mapped_column(String(48), default="")
+    sections: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    included_refs: Mapped[list] = mapped_column(JSON, default=list)
+    excluded_refs: Mapped[list] = mapped_column(JSON, default=list)
+    warnings: Mapped[list] = mapped_column(JSON, default=list)
+    degraded: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[str] = mapped_column(String(32), default=_now)

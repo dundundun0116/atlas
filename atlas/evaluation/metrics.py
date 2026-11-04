@@ -3,11 +3,13 @@
 口径固定，避免"换个分母就变好看"：
 - 完成率 = 整条任务的终态是否 completed（不是子任务平均）；
 - 约束违规率 / 过期误用率 = 只要该 run 里有一步发生就算一次（保守口径）；
-- 恢复成功率 = 被中断的 run 中恢复并完成的占比；没有中断时记为 1.0 并单列 `interrupted_runs`，
-  不允许"没有样本却宣称 100%"。
+- **恢复成功率：没有故障注入样本时返回 `None`**，不再写 1.0。设计文档 §10.3
+  与调研报告 §7.6 都要求"无样本报 null"——没有中断样本就宣称 100% 是过度宣称。
+- 延迟/成本带来源标记（`latency_source` / `cost_source`）：当前评测脚手架里它们是
+  按 token 数估算的 `synthetic_estimate`，不是实测值；表尾会如实标注。
 """
 
-from typing import Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Sequence
 
 from atlas.evaluation.harness import RunResult
 
@@ -27,8 +29,16 @@ def _mean(values: Sequence[float]) -> float:
     return round(sum(values) / len(values), 4) if values else 0.0
 
 
-def aggregate(runs: Sequence[RunResult]) -> Dict[str, float]:
-    """把一组 run 压成指标字典；空集合返回全 0，不抛异常。"""
+def _source(values: Iterable[str]) -> str:
+    """一组指标值的来源：全一致就报那个来源，否则 mixed。"""
+    unique = sorted({str(v) for v in values if str(v or "").strip()})
+    if not unique:
+        return "unknown"
+    return unique[0] if len(unique) == 1 else "mixed"
+
+
+def aggregate(runs: Sequence[RunResult]) -> Dict[str, Any]:
+    """把一组 run 压成指标字典；空集合返回 0 计数的字典，不抛异常。"""
     interrupted = [r for r in runs if r.interrupted]
     return {
         "n": len(runs),
@@ -36,13 +46,17 @@ def aggregate(runs: Sequence[RunResult]) -> Dict[str, float]:
         "completion_rate": _mean([1.0 if r.completed else 0.0 for r in runs]),
         "constraint_violation_rate": _mean([1.0 if r.violations else 0.0 for r in runs]),
         "stale_misuse_rate": _mean([1.0 if r.stale_misuses else 0.0 for r in runs]),
+        # 没有故障注入样本 ⇒ null（None），不是 1.0
         "recovery_success_rate": (
-            _mean([1.0 if r.recovered else 0.0 for r in interrupted]) if interrupted else 1.0
+            _mean([1.0 if r.recovered else 0.0 for r in interrupted]) if interrupted else None
         ),
         "avg_context_tokens": _mean([r.context_tokens for r in runs]),
         "avg_model_calls": _mean([r.model_calls for r in runs]),
         "avg_latency_ms": _mean([r.latency_ms for r in runs]),
         "avg_cost_usd": round(_mean([r.cost_usd for r in runs]), 6),
+        # 指标来源：从估算值变实测值时，这里会自动从 synthetic_estimate 变成 measured
+        "latency_source": _source(getattr(r, "latency_source", "") for r in runs),
+        "cost_source": _source(getattr(r, "cost_source", "") for r in runs),
     }
 
 
@@ -53,7 +67,7 @@ def group_by(runs: Sequence[RunResult], key: str) -> Dict[str, List[RunResult]]:
     return dict(sorted(groups.items()))
 
 
-def grouped_metrics(runs: Sequence[RunResult], key: str = "policy") -> Dict[str, Dict[str, float]]:
+def grouped_metrics(runs: Sequence[RunResult], key: str = "policy") -> Dict[str, Dict[str, Any]]:
     return {name: aggregate(group) for name, group in group_by(runs, key).items()}
 
 
@@ -71,7 +85,12 @@ _COLUMNS = (
 )
 
 
-def render_table(groups: Dict[str, Dict[str, float]], title: str = "") -> str:
+def _format_rate(value: Any) -> str:
+    """无样本的指标显示 `—`，而不是 0 或 1（两者都是无根据的断言）。"""
+    return "—" if value is None else f"{float(value):.3f}"
+
+
+def render_table(groups: Dict[str, Dict[str, Any]], title: str = "") -> str:
     """Markdown 表：质量 / 可靠性 / 上下文 / 成本 四类同表，组名按字典序。"""
     header = "| " + " | ".join(name for name, _ in _COLUMNS) + " |"
     divider = "|" + "|".join("---" for _ in _COLUMNS) + "|"
@@ -84,10 +103,10 @@ def render_table(groups: Dict[str, Dict[str, float]], title: str = "") -> str:
                 [
                     name,
                     str(int(row.get("n", 0))),
-                    f"{row.get('completion_rate', 0):.3f}",
-                    f"{row.get('constraint_violation_rate', 0):.3f}",
-                    f"{row.get('stale_misuse_rate', 0):.3f}",
-                    f"{row.get('recovery_success_rate', 0):.3f}",
+                    _format_rate(row.get("completion_rate", 0)),
+                    _format_rate(row.get("constraint_violation_rate", 0)),
+                    _format_rate(row.get("stale_misuse_rate", 0)),
+                    _format_rate(row.get("recovery_success_rate")),
                     f"{row.get('avg_context_tokens', 0):.1f}",
                     f"{row.get('avg_model_calls', 0):.1f}",
                     f"{row.get('avg_latency_ms', 0):.1f}",
@@ -96,7 +115,22 @@ def render_table(groups: Dict[str, Dict[str, float]], title: str = "") -> str:
             )
             + " |"
         )
-    return "\n".join(line for line in lines if line)
+    notes = _footnotes(groups)
+    return "\n".join(line for line in lines + notes if line)
+
+
+def _footnotes(groups: Dict[str, Dict[str, Any]]) -> List[str]:
+    """如实标注口径：哪些指标是估算、哪些指标没有样本。"""
+    notes: List[str] = []
+    sources = {
+        str(row.get("latency_source", "")) for row in groups.values()
+    } | {str(row.get("cost_source", "")) for row in groups.values()}
+    if any("synthetic" in source for source in sources):
+        notes.append("")
+        notes.append("> 延迟/成本为 `synthetic_estimate`（按 token 数与单价估算），不是实测值。")
+    if any(row.get("recovery_success_rate") is None for row in groups.values()):
+        notes.append("> 恢复成功率为 `—`：该组没有故障注入样本（无样本报 null，不报 1.0）。")
+    return notes
 
 
 def failing_runs(runs: Iterable[RunResult]) -> List[Dict[str, object]]:

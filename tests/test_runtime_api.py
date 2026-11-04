@@ -140,7 +140,10 @@ class TestStateTraceReplay:
         repo.add_node("s1", type_="fact", content="主引理", source="paper:1", confidence=0.9)
         state = runtime.get_state("s1")
         assert {"session_id", "goal", "state", "failure_reason", "allowed_triggers",
-                "nodes", "edges", "checkpoint", "provenance"} == set(state)
+                "nodes", "edges", "checkpoint", "provenance",
+                "workflow_version"} == set(state)
+        # 显式工作流版本：`/orchestrate` 是 legacy_research_v1，不能冒充 DAG
+        assert state["workflow_version"] == "legacy_research_v1"
         assert state["nodes"][0]["source"] == "paper:1"
         # 证据/理由/meta 对 API 可见：统一工作台不读库也能展示依据
         assert {"reason", "evidence", "meta"} <= set(state["nodes"][0])

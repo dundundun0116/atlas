@@ -19,8 +19,14 @@ import re
 from typing import Callable, List, Optional, Sequence
 
 from atlas.context.assembler import ContextAssembler
+from atlas.context.builder import (
+    DEFAULT_ZONES,
+    ContextPackage,
+    build_context_package,
+)
 from atlas.context.carryover import CarryOverManager
 from atlas.context.extractor import LLMCarryOverExtractor
+from atlas.context.provenance import is_stale, stale_reason
 from atlas.memory.engine import GraphMemoryEngine
 from atlas.memory.schema import NodeStatus, NodeType
 from atlas.orchestration.state_machine import TaskStateMachine
@@ -294,6 +300,66 @@ class ServiceRuntime:
         self.repository.expire(self.session_id, node_id, reason=reason, actor=self.actor)
         self.engine = self.repository.rebuild_engine(self.session_id)
 
+    def expire_overdue(self, now=None, reason: str = "") -> List[str]:
+        """按**时间规则**把过期节点标为 expired（设计文档 §4.10 允许的三个触发之一）。
+
+        只处理 `valid_until` 已过且仍是 active 的节点；解析不了的时间**不猜**，
+        留给人工或后续带版本的观测。返回本次实际作废的节点 id（幂等：第二次为空）。
+        """
+        expired: List[str] = []
+        for node in sorted(self.engine.nodes.values(), key=lambda n: n.id):
+            if node.status is not NodeStatus.ACTIVE:
+                continue
+            if not is_stale(node, now):
+                continue
+            node_reason = reason or f"时间规则：{stale_reason(node, now)}"
+            self.repository.expire(
+                self.session_id, node.id, reason=node_reason, actor=self.actor
+            )
+            expired.append(node.id)
+        if expired:
+            self.engine = self.repository.rebuild_engine(self.session_id)
+        return expired
+
+    # ---------- 上下文包（每次模型调用的输入快照） ----------
+
+    def build_context(
+        self,
+        role: str,
+        *,
+        budget_tokens: int = 4000,
+        focus: str = "",
+        token_counter: Optional[Callable[[str], int]] = None,
+        tokenizer_name: str = "",
+        zones: Sequence[str] = DEFAULT_ZONES,
+        summaries: Sequence[str] = (),
+        recent: Sequence[str] = (),
+        persist: bool = True,
+    ) -> ContextPackage:
+        """组装一次上下文并（默认）落库 digest/分区 token/引用清单。
+
+        每次都从 repository 重建图快照：上下文必须对应**当前**状态版本，
+        不能拿一个可能过期的内存引擎糊弄模型。
+        """
+        self.engine = self.repository.rebuild_engine(self.session_id)
+        session_row = self.repository.get_session(self.session_id)
+        package = build_context_package(
+            self.engine,
+            role=role,
+            session_id=self.session_id,
+            state_version=int(getattr(session_row, "graph_version", 0) or 0),
+            budget_tokens=budget_tokens,
+            token_counter=token_counter,
+            tokenizer_name=tokenizer_name,
+            focus=focus,
+            summaries=summaries,
+            recent=recent,
+            zones=zones,
+        )
+        if persist:
+            self.repository.save_context_package(self.session_id, package.to_dict())
+        return package
+
     # ---------- checkpoint / 恢复 ----------
 
     def checkpoint(
@@ -329,6 +395,7 @@ class ServiceRuntime:
         return {
             "state": self.machine.state.value if self.machine is not None else "unknown",
             "graph_version": len(self.repository.nodes(self.session_id)),
+            "workflow_version": self.repository.workflow_version(self.session_id),
             "checkpoint": (
                 {
                     "task_state": row.task_state,

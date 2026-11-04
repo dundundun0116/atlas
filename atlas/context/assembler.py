@@ -68,41 +68,49 @@ class ContextAssembler:
     # ---------- 对外入口 ----------
 
     def assemble(self, summaries: Sequence[str], recent_raw: Sequence[str],
-                 budget_tokens: int, focus: str = "") -> AssembleResult:
+                 budget_tokens: int, focus: str = "",
+                 zones: Sequence[str] = None) -> AssembleResult:
+        """组装四区；`zones` 可只选其中几区（API 编排路径没有结转缓冲，只要计划+提示）。"""
+        zone_keys = tuple(self._ZONE_HEADERS) if zones is None else tuple(zones)
+        unknown = [key for key in zone_keys if key not in self._ZONE_HEADERS]
+        if unknown:
+            raise ValueError(f"未知上下文区：{unknown}（可选 {sorted(self._ZONE_HEADERS)}）")
         plan_text = self._render_plan(focus=focus)
         plan_tokens = self.count(plan_text)
-        if plan_tokens + sum(self.floors.values()) > budget_tokens:
+        floors_total = sum(self.floors[key] for key in zone_keys)
+        if plan_tokens + floors_total > budget_tokens:
             raise PlanZoneOverflow(
-                f"计划区需 {plan_tokens} tokens，加各区地板 {sum(self.floors.values())} "
+                f"计划区需 {plan_tokens} tokens，加各区地板 {floors_total} "
                 f"超过总预算 {budget_tokens}"
             )
 
         remaining = budget_tokens - plan_tokens
-        item_lists = {
+        all_items = {
             "summary": list(summaries),
             "recent": list(recent_raw),
             "hints": self.engine.hints(),
         }
+        item_lists = {key: all_items[key] for key in zone_keys}
         demand = {
-            key: self.count(self._render_zone(header, item_lists[key]))
-            for key, header in self._ZONE_HEADERS.items()
+            key: self.count(self._render_zone(self._ZONE_HEADERS[key], item_lists[key]))
+            for key in zone_keys
         }
         if sum(demand.values()) <= remaining:
             allowances = demand
         else:
             allowances = {
                 key: max(self.floors[key], int(self.shares[key] * remaining))
-                for key in item_lists
+                for key in zone_keys
             }
 
         zone_texts: Dict[str, str] = {}
         trimmed: Dict[str, bool] = {}
-        for key, header in self._ZONE_HEADERS.items():
+        for key in zone_keys:
             kept, was_trimmed = self._fit_items(item_lists[key], allowances[key])
-            zone_texts[key] = self._render_zone(header, kept)
+            zone_texts[key] = self._render_zone(self._ZONE_HEADERS[key], kept)
             trimmed[key] = was_trimmed
 
-        text = "\n\n".join([plan_text] + [zone_texts[k] for k in self._ZONE_HEADERS])
+        text = "\n\n".join([plan_text] + [zone_texts[k] for k in zone_keys])
         text = text.rstrip() + "\n"
         self._audit(text)
         audit = getattr(self, "_last_audit", None)

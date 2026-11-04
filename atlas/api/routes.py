@@ -5,6 +5,7 @@
 """
 
 import time
+from dataclasses import replace
 from typing import Any, Callable, Dict, Optional
 
 from fastapi import FastAPI
@@ -28,9 +29,13 @@ from atlas.tools import ResearchRequest, ResearchToolError
 def create_app(repository: GraphRepository,
                tracer_factory: Optional[Callable[[str], Any]] = None,
                research_tool: Any = None,
-               orchestrate_llm: Optional[Callable[[str], str]] = None) -> FastAPI:
-    app = FastAPI(title="Atlas Task Runtime API", version="0.2.0")
+               orchestrate_llm: Optional[Callable[[str], str]] = None,
+               orchestrate_budget: Any = None,
+               context_budget_tokens: Optional[int] = None,
+               context_token_counter: Optional[Callable[[str], int]] = None) -> FastAPI:
+    app = FastAPI(title="Atlas Task Runtime API", version="0.3.0")
     runtime = AgentRuntime(repository, tracer_factory=tracer_factory)
+    terminal_states = ("completed", "failed")
 
     @app.exception_handler(RuntimeFailure)
     async def _runtime_failure(_request, exc: RuntimeFailure):
@@ -153,7 +158,7 @@ def create_app(repository: GraphRepository,
             )
         view = runtime.get_state(session_id)  # 不存在 → 404
         current = view["state"]
-        if current in ("completed", "failed"):
+        if current in terminal_states:
             raise StateConflict(f"任务已到终态 {current}，不能再编排", request_id=payload.request_id)
         if current != "planning":
             raise StateConflict(
@@ -162,8 +167,39 @@ def create_app(repository: GraphRepository,
         problem = (payload.problem or view.get("goal") or "").strip()
         if not problem:
             raise Unrecoverable("任务没有可用的问题文本", request_id=payload.request_id)
-        graph = RepositoryGraph(repository, session_id)
-        orchestrator = Orchestrator(orchestrate_llm, graph, research_tool=research_tool)
+
+        # 0) 时间规则过期：真实调用点。活跃状态先按 valid_until 作废，再构造上下文，
+        #    否则模型会看到本该失效的约束（设计文档 §4.10）。
+        runtime.expire_due_nodes(session_id)
+        graph = RepositoryGraph(
+            repository, session_id,
+            **({"context_budget_tokens": context_budget_tokens}
+               if context_budget_tokens else {}),
+            **({"context_token_counter": context_token_counter}
+               if context_token_counter else {}),
+        )
+
+        def advance(trigger: str, reason: str = "") -> None:
+            """把编排中的状态转移**当场落库**（不是最后再补一遍）。"""
+            if runtime.get_state(session_id)["state"] in terminal_states:
+                return
+            runtime.advance_task(
+                session_id, trigger, reason=(reason or "")[:200],
+                request_id=payload.request_id,
+            )
+
+        budget = orchestrate_budget
+        if budget is not None:
+            # 传进来的只是"模板"：每次编排用一份新的预算实例，上一次的消耗不污染这一次。
+            budget = budget() if callable(budget) else replace(budget)
+        orchestrator = Orchestrator(
+            orchestrate_llm, graph,
+            research_tool=research_tool,
+            budget=budget,
+            transition=advance,
+            trace_sink=lambda event: repository.record_trace(session_id, event),
+            run_id=session_id,
+        )
         try:
             answer, trace = orchestrator.solve(
                 problem, session_id=session_id, subtask_id=payload.subtask_id,
@@ -173,38 +209,35 @@ def create_app(repository: GraphRepository,
             reason = f"编排失败：{type(exc).__name__}: {exc}"
             repository.record_trace(session_id, {
                 "trace_id": f"orch-{payload.request_id or time.time_ns()}",
+                "run_id": session_id,
                 "agent_role": "orchestrator", "tool_name": "",
                 "outcome": "error", "stop_reason": "orchestration_error",
+                "error": reason[:300],
             })
-            try:
-                runtime.advance_task(session_id, "fail", reason=reason[:200],
-                                     request_id=payload.request_id,
-                                     idempotency_key=f"orch-fail-{payload.request_id or 'auto'}")
-            except RuntimeFailure:
-                pass
+            advance("fail", reason)
             raise Unrecoverable(reason, request_id=payload.request_id) from exc
 
-        # 把编排结果同步进任务生命周期（状态机只走合法转移）
-        for trigger, expected in (("plan_ready", "planning"), ("work_done", "executing"),
-                                  ("audit_pass", "auditing")):
-            if runtime.get_state(session_id)["state"] != expected:
-                continue
-            try:
-                runtime.advance_task(
-                    session_id, trigger, reason="编排器完成",
-                    request_id=payload.request_id,
-                    idempotency_key=f"orch-{trigger}-{payload.request_id or 'auto'}",
-                )
-            except RuntimeFailure:
-                break
-
+        # 成功也必须**已经**落到终态；没收敛就是接线错误，不能静默当成功。
         final_state = runtime.get_state(session_id)["state"]
+        if final_state not in terminal_states:
+            reason = f"编排返回但任务未收敛（state={final_state}）"
+            advance("fail", reason)
+            repository.record_trace(session_id, {
+                "trace_id": f"orch-{payload.request_id or time.time_ns()}",
+                "run_id": session_id, "agent_role": "orchestrator", "tool_name": "",
+                "outcome": "error", "stop_reason": "not_converged",
+            })
+            raise Unrecoverable(reason, request_id=payload.request_id)
+
         return schemas.OrchestrateView(
             session_id=session_id, state=final_state, answer=answer,
             route=trace.route, draft=trace.draft, calls=list(trace.calls),
             fact_ids=list(trace.fact_ids),
             research_trace_id=trace.research_trace_id,
             research_error=trace.research_error,
+            context_digests=list(trace.context_digests),
+            retries=trace.retries,
+            workflow_version=str(view.get("workflow_version") or ""),
         )
 
     # ---------- 读 ----------
@@ -220,6 +253,16 @@ def create_app(repository: GraphRepository,
     @app.get("/tasks/{session_id}/trace", response_model=schemas.TraceView)
     def get_trace(session_id: str):
         return schemas.TraceView(**runtime.get_trace(session_id))
+
+    @app.get("/tasks/{session_id}/contexts", response_model=schemas.ContextPackageListView)
+    def get_contexts(session_id: str, limit: int = 50):
+        """这次任务里每次模型调用实际看到的上下文（digest / 分区 token / 引用）。"""
+        runtime.get_state(session_id)  # 不存在 → 404
+        packages = repository.context_packages(session_id, limit=limit)
+        return schemas.ContextPackageListView(
+            session_id=session_id,
+            packages=[schemas.ContextPackageView(**item) for item in packages],
+        )
 
     @app.get("/tasks/{session_id}/report", response_model=schemas.ReportView)
     def get_report(session_id: str):
