@@ -173,7 +173,8 @@ class ResearchStepExecutor:
                            usage={"retries": max(0, result.attempts - 1)})
 
     def _do_verify(self, step, inputs: Dict[str, Any]) -> StepOutcome:
-        payload = self._audit(inputs.get("draft", ""), role="verify")
+        payload = self._audit(inputs.get("draft", ""), role="verify",
+                              evidence=inputs.get("evidence"))
         if payload is None:
             return StepOutcome(status="failed", error={
                 "kind": "model_error", "message": "auditor 输出无法解析"})
@@ -200,7 +201,8 @@ class ResearchStepExecutor:
         return StepOutcome(output={"draft": result.value.strip(), "revised": True})
 
     def _do_final_verify(self, step, inputs: Dict[str, Any]) -> StepOutcome:
-        payload = self._audit(inputs.get("draft", ""), role="final_verify")
+        payload = self._audit(inputs.get("draft", ""), role="final_verify",
+                              evidence=inputs.get("evidence"))
         if payload is None:
             return StepOutcome(status="failed", error={
                 "kind": "model_error", "message": "终检输出无法解析"})
@@ -326,10 +328,21 @@ class ResearchStepExecutor:
 
     # ---------- 内部 ----------
 
-    def _audit(self, draft: str, *, role: str) -> Optional[Dict[str, Any]]:
+    def _audit(self, draft: str, *, role: str,
+               evidence: Any = None) -> Optional[Dict[str, Any]]:
+        """核验草稿；`evidence` 必须一起给。
+
+        为什么：核验者只拿到草稿、看不到草稿依据的检索结果时，它唯一能说的就是
+        "这句话在共享状态图里找不到出处"——于是会把**正确答案**判成无证据，
+        再让修订步把答案删掉。这不是模型的问题，是判据缺了输入。
+        """
+        view = self._view("auditor", self.problem)
+        block = self._evidence_block(evidence)
+        if block:
+            view = f"{view}\n\n{block}".strip()
         result = call_model(
             lambda: self.llm(AUDITOR_PROMPT.format(
-                state_view=self._view("auditor", self.problem),
+                state_view=view,
                 problem=self.problem, draft=draft,
             )),
             "auditor", budget=self.budget,

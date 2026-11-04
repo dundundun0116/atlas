@@ -76,6 +76,10 @@ def main(argv=None) -> int:
                           help="每 N 题注入一次故障（0 = 不注入）")
     eval_cmd.add_argument("--json", dest="json_path", default="", help="报告 JSON 输出路径")
     eval_cmd.add_argument("--md", dest="md_path", default="", help="报告 Markdown 输出路径")
+    eval_cmd.add_argument("--model", default="",
+                          help="真模型名（留空 = 脚本化研究者）；需 source eval/.env")
+    eval_cmd.add_argument("--temperature", type=float, default=0.0)
+    eval_cmd.add_argument("--timeout", type=float, default=180.0)
 
     args = parser.parse_args(argv)
     if args.command == "export":
@@ -89,7 +93,10 @@ def main(argv=None) -> int:
         from atlas.evaluation.longhorizon import SuiteConfig, run_suite
 
         report = run_suite(SuiteConfig(count=args.tasks, seed=args.seed,
-                                       fault_every=args.fault_every))
+                                       fault_every=args.fault_every,
+                                       model=args.model,
+                                       temperature=args.temperature,
+                                       timeout_s=args.timeout))
         text = report.to_markdown()
         print(text)
         if args.json_path:

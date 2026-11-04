@@ -195,7 +195,9 @@ class TestPlanAPI:
             "retrieve", "draft", "verify", "repair", "final_verify",
         ]
         assert body["plan"]["validation"]["ok"] is True
-        assert len(body["dependencies"]) == 5
+        # 7 条：retrieve→draft / retrieve→verify / retrieve→final_verify（证据三处都要）
+        # + draft→verify / draft→repair / verify→repair / repair→final_verify
+        assert len(body["dependencies"]) == 7
 
     def test_submit_rejects_invalid_plan_json(self, db):
         client = _client(db)
@@ -317,3 +319,57 @@ class TestPlanAPI:
         statuses = {step["step_id"]: step["status"] for step in after["steps"]}
         assert statuses["verify"] == "stale"
         assert statuses["draft"] == "done"
+
+
+class TestVerifierSeesEvidence:
+    """核验者必须拿到草稿依据的证据，否则它只能判"这句话没出处"。
+
+    这条不是洁癖：真模型一跑就暴露了——verify 只绑 draft 时，auditor 会把
+    **引用正确证据的草稿**判成无出处，再让修订步把正确答案删掉。
+    """
+
+    @staticmethod
+    def _executor(llm):
+        from atlas.planning.executors import ResearchStepExecutor
+
+        return ResearchStepExecutor(llm, problem="某器件的标定年份是哪一年？")
+
+    def test_verify_prompt_contains_the_evidence(self):
+        prompts = []
+
+        def llm(prompt):
+            prompts.append(prompt)
+            return json.dumps({"verdict": "ok", "issues": "", "refs": []})
+
+        plan = build_research_plan("某器件的标定年份是哪一年？")
+        executor = self._executor(llm)
+        outcome = executor._do_verify(plan.step("verify"), {
+            "draft": "答案是 1975 年。",
+            "evidence": [{"source": "内部技术档案", "chunk_id": "c1",
+                          "quote": "档案原文：某器件的标定年份为 ANSWER:1975。"}],
+        })
+        assert outcome.status == "succeeded"
+        assert "ANSWER:1975" in prompts[0], "证据必须出现在核验者的上下文里"
+
+    def test_final_verify_prompt_contains_the_evidence(self):
+        prompts = []
+
+        def llm(prompt):
+            prompts.append(prompt)
+            return json.dumps({"verdict": "ok", "issues": "", "refs": []})
+
+        plan = build_research_plan("某器件的标定年份是哪一年？")
+        executor = self._executor(llm)
+        executor._do_final_verify(plan.step("final_verify"), {
+            "draft": "答案是 1975 年。",
+            "evidence": [{"source": "内部技术档案", "chunk_id": "c1",
+                          "quote": "档案原文：某器件的标定年份为 ANSWER:1975。"}],
+        })
+        assert "ANSWER:1975" in prompts[0]
+
+    def test_plan_binds_evidence_into_both_verifiers(self):
+        plan = build_research_plan("问题")
+        thens = {(item.from_step_id, item.to_step_id, item.binding["input_name"])
+                 for item in plan.dependencies if item.binding}
+        assert ("retrieve", "verify", "evidence") in thens
+        assert ("retrieve", "final_verify", "evidence") in thens

@@ -16,6 +16,7 @@ import pytest
 from atlas.evaluation.longhorizon import (
     MIN_N_FOR_EFFECT,
     AnswerOracle,
+    ApiReader,
     Chunk,
     FaultCounter,
     GeneratedTask,
@@ -242,6 +243,12 @@ class TestConfigFingerprint:
         assert SuiteConfig(count=6, seed=8).fingerprint() != base
         assert SuiteConfig(count=7, seed=7).fingerprint() != base
         assert SuiteConfig(count=6, seed=7, fault_every=0).fingerprint() != base
+        # 换模型当然算换了一套配置
+        assert SuiteConfig(count=6, seed=7, model="m1").fingerprint() != base
+
+    def test_model_field_decides_reader_kind(self):
+        assert SuiteConfig().reader_kind == "scripted"
+        assert SuiteConfig(model="deepseek-v4.1-flash").reader_kind == "api"
 
 
 class TestReportRendering:
@@ -250,9 +257,10 @@ class TestReportRendering:
                              state="completed", passed=True, expected="passed",
                              tool_invocations=1)
                  for i in range(2)]
-        config = SuiteConfig(count=2, seed=1, min_n_for_effect=1)
+        config = SuiteConfig(count=2, seed=1, min_n_for_effect=1,
+                             model="fake-model")
         report = SuiteReport(config=config, tasks=tasks, faults=FaultCounter(),
-                             question_digest="x")
+                             question_digest="x", reader_kind="api")
         text = report.to_markdown()
         assert report.mechanism_only is False
         assert "Wilson" in text
@@ -262,6 +270,17 @@ class TestReportRendering:
         assert MIN_N_FOR_EFFECT == 30
         assert SuiteConfig().min_n_for_effect == 30
 
+    def test_scripted_reader_is_always_mechanism_only(self):
+        """样本再多也不能把脚本化结果当能力数字——它证明的是机制，不是模型。"""
+        tasks = [TaskOutcome(task_id=f"T{i:02d}", question="q", gold="1",
+                             state="completed", passed=True, expected="passed")
+                 for i in range(40)]
+        report = SuiteReport(config=SuiteConfig(count=40, seed=1), tasks=tasks,
+                             faults=FaultCounter(), question_digest="x")
+        assert report.n >= 30
+        assert report.mechanism_only is True
+        assert "只报机制验证" in report.to_markdown()
+
     def test_violations_show_up_in_the_report(self):
         bad = TaskOutcome(task_id="T01", question="q", gold="1", state="paused",
                           expected="passed", issues=["任务没有到终态（paused）"])
@@ -269,3 +288,105 @@ class TestReportRendering:
                              faults=FaultCounter(), question_digest="x")
         assert [item.task_id for item in report.inconsistent] == ["T01"]
         assert "✗" in report.to_markdown()
+
+
+# ---------------------------------------------------------------- 真模型研究者
+
+
+def _transport(*responses):
+    """假的传输层：按顺序返回响应/抛异常，用来测记账与重试（不联网）。"""
+    calls = []
+
+    def _send(payload):
+        calls.append(payload)
+        item = responses[min(len(calls) - 1, len(responses) - 1)]
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    _send.calls = calls
+    return _send
+
+
+def _reply(content="ok", prompt=10, completion=3, cost=0.0001):
+    return {
+        "choices": [{"message": {"content": content}}],
+        "usage": {"prompt_tokens": prompt, "completion_tokens": completion,
+                  "opencode": {"list_cost": cost}},
+    }
+
+
+class TestApiReader:
+    def test_requires_a_model(self):
+        with pytest.raises(ValueError):
+            ApiReader("")
+
+    def test_records_measured_usage(self):
+        send = _transport(_reply("a", 100, 20, 0.001), _reply("b", 200, 40, 0.002))
+        reader = ApiReader("m", transport=send)
+        assert reader("p1") == "a"
+        assert reader("p2") == "b"
+        totals = reader.totals
+        assert totals["calls"] == 2
+        assert totals["prompt_tokens"] == 300
+        assert totals["completion_tokens"] == 60
+        assert abs(totals["cost_usd"] - 0.003) < 1e-9
+        assert totals["source"] == "measured"
+
+    def test_preamble_is_prepended(self):
+        send = _transport(_reply())
+        ApiReader("m", transport=send)("原始 prompt")
+        content = send.calls[0]["messages"][0]["content"]
+        assert content.endswith("原始 prompt")
+        assert "虚构" in content
+
+    def test_retries_on_server_error_then_succeeds(self):
+        import urllib.error
+
+        error = urllib.error.HTTPError("u", 503, "busy", {}, None)
+        send = _transport(error, _reply("第二条成功"))
+        reader = ApiReader("m", transport=send, max_attempts=3, backoff_s=0)
+        assert reader("p") == "第二条成功"
+        assert len(send.calls) == 2
+        assert reader.totals["calls"] == 1, "失败的尝试不进用量账"
+
+    def test_gives_up_after_max_attempts(self):
+        import urllib.error
+
+        error = urllib.error.HTTPError("u", 500, "boom", {}, None)
+        reader = ApiReader("m", transport=_transport(error), max_attempts=2, backoff_s=0)
+        with pytest.raises(RuntimeError):
+            reader("p")
+
+    def test_client_error_is_not_retried(self):
+        import urllib.error
+
+        error = urllib.error.HTTPError("u", 400, "bad", {}, None)
+        send = _transport(error)
+        reader = ApiReader("m", transport=send, max_attempts=3, backoff_s=0)
+        with pytest.raises(urllib.error.HTTPError):
+            reader("p")
+        assert len(send.calls) == 1, "4xx 是调用方的错，重试没意义"
+
+    def test_scripted_run_reports_zero_usage(self, report):
+        first, _ = report
+        assert first.reader_kind == "scripted"
+        assert first.usage == {}
+        assert all(item.prompt_tokens == 0 for item in first.tasks)
+
+
+class TestCounterfactualTasks:
+    """题集必须用世界知识里不存在的实体，否则真模型会按常识答、把机制评测带偏。"""
+
+    def test_subjects_are_fictional_devices(self):
+        from atlas.evaluation.longhorizon import SUBJECTS
+
+        assert all(any(ch.isdigit() for ch in item) for item in SUBJECTS), \
+            "型号里应当带编号，现实中没有同名器件"
+        assert not any(item in ("爱因斯坦", "图灵") for item in SUBJECTS)
+
+    def test_gold_chunk_reads_like_an_archive(self):
+        for task in generate_tasks(count=4, seed=7):
+            quote = task.gold_chunk.quote
+            assert "档案" in quote
+            assert f"ANSWER:{task.gold}" in quote

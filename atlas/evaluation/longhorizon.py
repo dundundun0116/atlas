@@ -29,9 +29,12 @@ import os
 import random
 import re
 import tempfile
+import time
 import unicodedata
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from atlas.api import create_app
 from atlas.storage.repository import GraphRepository, open_database
@@ -39,11 +42,17 @@ from atlas.tools import EvidenceItem, ResearchResult
 from atlas.tools.protocol import ResearchToolError
 
 #: 生成器用的词表（都是固定常量，改它等于改题集 ⇒ 指纹会变，报告里看得见）。
+#:
+#: **为什么全是虚构型号**：这组题用来测"证据有没有被送到模型面前、状态与恢复对不对"，
+#: 不是测世界知识。如果用真实实体（"爱因斯坦的出生年份"）配随机 gold，真模型会按
+#: 世界知识答 1879 而不是我们给的 1914——测出来的就成了"模型肯不肯抄假事实"。
+#: 换成现实里不存在的型号后，答案**只可能**来自检索到的资料。
 SUBJECTS = (
-    "爱因斯坦", "居里夫人", "图灵", "冯·诺依曼", "香农", "哥德尔",
-    "玻尔", "海森堡", "费米", "朗道", "诺特", "拉马努金",
+    "K-17 型传感器", "MX-204 型继电器", "ZR-9 型光谱仪", "TA-33 型陀螺仪",
+    "PQ-8 型电容器", "VH-51 型变频器", "LS-2 型激光器", "AB-77 型编码器",
+    "CN-15 型调制器", "DG-40 型稳压源", "FR-6 型滤波器", "JW-19 型示波器",
 )
-ATTRIBUTES = ("出生年份", "第一篇论文发表年份", "获得重要奖项的年份")
+ATTRIBUTES = ("标定年份", "首次出厂年份", "改版年份")
 
 #: 效果数字的门槛：少于这么多题就只报机制验证（§11 验收）。
 MIN_N_FOR_EFFECT = 30
@@ -91,8 +100,9 @@ def generate_tasks(count: int = 8, seed: int = 7) -> List[GeneratedTask]:
     if count <= 0:
         raise ValueError("count 必须为正")
     rng = random.Random(seed)
-    # 年份池不重复采样：避免两道题的 gold 撞车，否则"答对"会互相污染
-    years = list(range(1200, 2000, 7))
+    # 年份池不重复采样：避免两道题的 gold 撞车，否则"答对"会互相污染。
+    # 区间取现代年份，免得"1953 年标定的传感器"读起来太离谱。
+    years = list(range(1950, 2085, 1))
     rng.shuffle(years)
     if 2 * count + count > len(years):  # gold + 每题两个干扰项
         raise ValueError(f"年份池不够：count={count}")
@@ -107,13 +117,14 @@ def generate_tasks(count: int = 8, seed: int = 7) -> List[GeneratedTask]:
         pool_index += 3
 
         chunks = [
-            Chunk(source=f"{subject}·权威条目", chunk_id=f"c{index:02d}-gold",
-                  quote=f"{subject}的{attribute}是 ANSWER:{gold}。"),
+            Chunk(source=f"内部技术档案 《{subject} 卷》第 3 版",
+                  chunk_id=f"c{index:02d}-gold",
+                  quote=f"档案原文：{subject}的{attribute}为 ANSWER:{gold}。"),
         ]
         for order, value in enumerate(distractors):
             chunks.append(Chunk(
                 source=f"二手资料 {order + 1}", chunk_id=f"c{index:02d}-d{order}",
-                quote=f"另一份二手资料提到 {value} 年，但没有标注出处，可信度存疑。",
+                quote=f"另一份未署名的二手备忘录提到 {value} 年，但未标注出处，可信度存疑。",
             ))
         rng.shuffle(chunks)
         tasks.append(GeneratedTask(
@@ -246,12 +257,130 @@ class FaultCounter:
 _ANSWER = re.compile(r"ANSWER:(\d+)")
 
 
+#: 发给真模型的统一前置说明。**这一点必须如实写进报告**：
+#: 本评测测的是运行时机制，不测世界知识，所以明确告诉模型"资料虚构、只用资料答题"。
+#: 不这么做，模型会拿世界知识纠正我们给的 gold，测出来的就不是机制了。
+EVAL_PREAMBLE = (
+    "【评测说明】下面是虚构档案里的一道题，用于测试运行时行为：\n"
+    "1) 只根据提示中出现过的资料作答，不要用世界知识纠正或补充；\n"
+    "2) 资料中形如 `ANSWER:<数字>` 的标记就是本题的权威答案；\n"
+    "3) 资料里没有答案时，直接说明「上下文里没有可用证据」，不要猜；\n"
+    "4) **最终答案只写你要给的那个结论**：不要在答案里复述、对比或讨论其它候选数字\n"
+    "   （判分是确定性的：答案正文里出现别的数字就算错，哪怕你写的是“不采用”）；\n"
+    "5) 要求输出 JSON 时只输出 JSON。\n\n"
+)
+
+
+class ApiReader:
+    """真模型研究者：OpenAI 兼容端点，逐次记账真实 usage。
+
+    与 `ScriptedReader` 的区别只在一处——它**不是**确定性的。所以报告里要把它与
+    脚本化结果分开标：`reader_kind="api"`，token 数来自响应的 `usage`（`measured`），
+    而不是按字数估的 `synthetic_estimate`。
+    """
+
+    kind = "api"
+
+    def __init__(self, model: str, *, base_url: str = "", api_key: str = "",
+                 temperature: float = 0.0, timeout_s: float = 180.0,
+                 session: str = "atlas-longhorizon", preamble: str = EVAL_PREAMBLE,
+                 transport: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+                 max_attempts: int = 3, backoff_s: float = 2.0) -> None:
+        if not model:
+            raise ValueError("ApiReader 需要 model")
+        self.model = model
+        self.base_url = (base_url or os.environ.get("OPENAI_BASE_URL", "")).rstrip("/")
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        self.temperature = temperature
+        self.timeout_s = timeout_s
+        self.session = session
+        self.preamble = preamble
+        self.transport = transport or self._post
+        self.max_attempts = max(1, max_attempts)
+        self.backoff_s = max(0.0, backoff_s)
+        #: 每次调用的记账（token 全是响应里拿的，不是估的）
+        self.calls: List[Dict[str, Any]] = []
+
+    # ---------- 记账 ----------
+
+    @property
+    def totals(self) -> Dict[str, Any]:
+        prompt = sum(item["prompt_tokens"] for item in self.calls)
+        completion = sum(item["completion_tokens"] for item in self.calls)
+        latency = sum(item["latency_s"] for item in self.calls)
+        cost = sum(item.get("cost_usd") or 0.0 for item in self.calls)
+        return {"calls": len(self.calls), "prompt_tokens": prompt,
+                "completion_tokens": completion, "latency_s": latency,
+                "cost_usd": cost, "source": "measured"}
+
+    # ---------- 调用 ----------
+
+    def __call__(self, prompt: str) -> str:
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": self.preamble + prompt}],
+            "temperature": self.temperature,
+        }
+        last: Optional[BaseException] = None
+        for attempt in range(1, self.max_attempts + 1):
+            started = time.time()
+            try:
+                response = self.transport(payload)
+            except urllib.error.HTTPError as exc:
+                # HTTPError 是 URLError 的子类，**必须先判**：4xx 是调用方的错，重试没意义
+                last = exc
+                if exc.code in (408, 425, 429) or exc.code >= 500:
+                    time.sleep(min(self.backoff_s * attempt, 6.0))
+                    continue
+                raise
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+                last = exc
+                time.sleep(min(self.backoff_s * attempt, 6.0))
+                continue
+            latency = time.time() - started
+            usage = response.get("usage") or {}
+            self.calls.append({
+                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                "completion_tokens": int(usage.get("completion_tokens") or 0),
+                "cost_usd": float((usage.get("opencode") or {}).get("list_cost") or 0.0),
+                "latency_s": latency,
+                "attempt": attempt,
+            })
+            choices = response.get("choices") or [{}]
+            return str((choices[0].get("message") or {}).get("content") or "")
+        raise RuntimeError(f"模型调用连续失败 {self.max_attempts} 次：{last}")
+
+    # ---------- 传输 ----------
+
+    def _post(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.base_url or not self.api_key:
+            raise RuntimeError(
+                "真模型需要 OPENAI_BASE_URL 与 OPENAI_API_KEY（可 source eval/.env）")
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+            "User-Agent": os.environ.get("ATLAS_EVAL_UA", "atlas-longhorizon/1.0"),
+        }
+        # opencode zen 端点不带这个头会 400 MissingSessionID
+        if os.environ.get("OPENCODE_COMPAT", "1") == "1":
+            headers["x-opencode-session"] = os.environ.get(
+                "OPENCODE_SESSION", self.session)
+        request = urllib.request.Request(
+            f"{self.base_url}/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers=headers, method="POST")
+        with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+
 class ScriptedReader:
     """脚本化研究者：上下文里有 `ANSWER:<n>` 就答它，没有就明说不知道。
 
     它**故意**只会抄：这样"答对/答错"只取决于运行时有没把证据送到模型面前，
     故障、恢复、上下文组装的差异才能被单独观测到（真实模型的随机性会盖掉这些差异）。
     """
+
+    kind = "scripted"
 
     def __init__(self) -> None:
         self.calls = 0
@@ -347,6 +476,11 @@ class TaskOutcome:
     expected: str = "passed"
     #: 工具被真正调用了几次（"未知不重发"要靠这个数来证，不能靠嘴说）
     tool_invocations: int = 0
+    #: 真模型跑出来的用量（脚本化研究者时恒为 0/None）
+    model_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: Optional[float] = None
 
     @property
     def consistent(self) -> bool:
@@ -375,6 +509,10 @@ class TaskOutcome:
             "expected": self.expected,
             "as_expected": self.as_expected,
             "tool_invocations": self.tool_invocations,
+            "model_calls": self.model_calls,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "cost_usd": self.cost_usd,
         }
 
 
@@ -432,10 +570,17 @@ def _resume(client, registry: GraphRepository, session_id: str, plan_id: str,
     outcome.reopens += len(stuck)
 
 
+def _reader_usage(reader) -> Dict[str, Any]:
+    totals = getattr(reader, "totals", None)
+    return dict(totals) if isinstance(totals, dict) else {}
+
+
 def run_task(client, registry, tool, task: GeneratedTask,
-             outcome: TaskOutcome, *, session_id: str, plan_id: str = "P1") -> None:
+             outcome: TaskOutcome, *, session_id: str, plan_id: str = "P1",
+             reader: Any = None) -> None:
     question = task.question
     state_before = tool.calls
+    usage_before = _reader_usage(reader)
     client.post("/tasks", json={"session_id": session_id, "goal": question})
     client.post(f"/tasks/{session_id}/plans",
                 json={"problem": question, "activate": True})
@@ -449,6 +594,15 @@ def run_task(client, registry, tool, task: GeneratedTask,
         outcome.resumed = state in ("completed", "failed")
 
     outcome.tool_invocations = tool.calls - state_before
+    if reader is not None:
+        after = _reader_usage(reader)
+        outcome.model_calls = int(after.get("calls", 0)) - int(usage_before.get("calls", 0))
+        outcome.prompt_tokens = (int(after.get("prompt_tokens", 0))
+                                 - int(usage_before.get("prompt_tokens", 0)))
+        outcome.completion_tokens = (int(after.get("completion_tokens", 0))
+                                     - int(usage_before.get("completion_tokens", 0)))
+        outcome.cost_usd = (float(after.get("cost_usd", 0.0))
+                            - float(usage_before.get("cost_usd", 0.0)))
     outcome.state = state
     outcome.answer = _latest_draft(registry, session_id, plan_id)
     verdict = AnswerOracle().grade(outcome.answer, task)
@@ -482,12 +636,22 @@ class SuiteConfig:
     fault_every: int = 3
     fault_kinds: Tuple[str, ...] = ("timeout", "invalid_request")
     min_n_for_effect: int = MIN_N_FOR_EFFECT
+    #: 空 = 脚本化研究者（确定性、零成本）；非空 = 真模型（走 OpenAI 兼容端点）
+    model: str = ""
+    temperature: float = 0.0
+    timeout_s: float = 180.0
+
+    @property
+    def reader_kind(self) -> str:
+        return "api" if self.model else "scripted"
 
     def to_dict(self) -> Dict[str, Any]:
         return {"count": self.count, "seed": self.seed,
                 "fault_every": self.fault_every,
                 "fault_kinds": list(self.fault_kinds),
-                "min_n_for_effect": self.min_n_for_effect}
+                "min_n_for_effect": self.min_n_for_effect,
+                "model": self.model, "temperature": self.temperature,
+                "timeout_s": self.timeout_s}
 
     def fingerprint(self) -> str:
         """配置指纹：同配置同指纹，改一个字段就变——报告里用来钉住"跑的是哪一套"。"""
@@ -501,6 +665,8 @@ class SuiteReport:
     tasks: List[TaskOutcome]
     faults: FaultCounter
     question_digest: str = ""
+    reader_kind: str = "scripted"
+    usage: Dict[str, Any] = field(default_factory=dict)
 
     # ---------- 三档独立判据 ----------
 
@@ -522,8 +688,12 @@ class SuiteReport:
 
     @property
     def mechanism_only(self) -> bool:
-        """样本量不到门槛：只报机制验证，不报效果数字（§11 验收）。"""
-        return self.n < self.config.min_n_for_effect
+        """只报机制验证、不报效果数字（§11 验收）。两个条件任一成立：
+
+        - 样本量不到门槛；
+        - 研究者是**脚本化**的——它证明的是"机制在故障下不自毁"，不是模型能力。
+        """
+        return self.n < self.config.min_n_for_effect or self.reader_kind != "api"
 
     @property
     def resume_required(self) -> List[str]:
@@ -581,6 +751,8 @@ class SuiteReport:
         return {
             "config": self.config.to_dict(),
             "config_fingerprint": self.config.fingerprint(),
+            "reader_kind": self.reader_kind,
+            "usage": dict(self.usage),
             "question_digest": self.question_digest,
             "run_digest": self.digest,
             "mechanism_only": self.mechanism_only,
@@ -614,6 +786,8 @@ class SuiteReport:
                      f"（count={self.config.count} seed={self.config.seed} "
                      f"fault_every={self.config.fault_every}）")
         lines.append(f"- 题集指纹：`{self.question_digest}`　运行指纹：`{self.digest}`")
+        lines.append(f"- 研究者：**{self.reader_kind}**"
+                     + (f"（{self.config.model}）" if self.config.model else "（脚本化，非模型）"))
         if self.mechanism_only:
             lines.append(f"- 样本量 {self.n} < {self.config.min_n_for_effect}"
                          " ⇒ **只报机制验证，不报效果数字**")
@@ -634,6 +808,13 @@ class SuiteReport:
         lines.append(f"- 恢复成功：{len(self.resume_succeeded)}/"
                      f"{len(self.resume_required)}（{recovery}）")
         lines.append(f"- 状态一致：{self.n - len(self.inconsistent)}/{self.n} 通过")
+        if self.usage:
+            lines.append(
+                f"- 用量（measured）：{self.usage.get('calls', 0)} 次模型调用，"
+                f"prompt {self.usage.get('prompt_tokens', 0)} tok，"
+                f"completion {self.usage.get('completion_tokens', 0)} tok，"
+                f"累计 {self.usage.get('latency_s', 0.0):.1f}s，"
+                f"${self.usage.get('cost_usd', 0.0):.4f}")
         faults = self.faults
         hit_rate = "—" if faults.hit_rate is None else f"{faults.hit_rate:.3f}"
         lines.append(f"- 故障注入：计划 {len(faults.planned)} 次，实际命中 "
@@ -653,6 +834,17 @@ class SuiteReport:
         return "\n".join(lines)
 
 
+def _token_counter() -> Callable[[str], int]:
+    """上下文预算用的计数器：优先真 tokenizer（tiktoken），退化成按字数估。"""
+    try:
+        import tiktoken
+
+        encoding = tiktoken.get_encoding("cl100k_base")
+        return lambda text: len(encoding.encode(str(text or "")))
+    except Exception:  # pragma: no cover - 没装 tiktoken 时命中
+        return lambda text: (len(str(text or "")) + 3) // 4
+
+
 def run_suite(config: Optional[SuiteConfig] = None, *,
               database_path: str = "") -> SuiteReport:
     """把整套题跑一遍（脚本化研究者 + 脚本化检索工具，不联网、不烧 token）。"""
@@ -661,7 +853,11 @@ def run_suite(config: Optional[SuiteConfig] = None, *,
     faults = plan_faults(tasks, every=cfg.fault_every, kinds=cfg.fault_kinds)
     counter = FaultCounter(planned=dict(faults.assignments))
     tool = SuiteResearchTool(tasks, faults, counter)
-    reader = ScriptedReader()
+    if cfg.model:
+        reader = ApiReader(cfg.model, temperature=cfg.temperature,
+                           timeout_s=cfg.timeout_s)
+    else:
+        reader = ScriptedReader()
 
     question_digest = hashlib.sha256(
         json.dumps([task.to_dict() for task in tasks], ensure_ascii=False,
@@ -675,7 +871,7 @@ def run_suite(config: Optional[SuiteConfig] = None, *,
         try:
             app = create_app(
                 registry, research_tool=tool, orchestrate_llm=reader,
-                context_token_counter=lambda text: (len(text) + 3) // 4,
+                context_token_counter=_token_counter(),
             )
             from fastapi.testclient import TestClient
 
@@ -686,13 +882,16 @@ def run_suite(config: Optional[SuiteConfig] = None, *,
                                       question=task.question, gold=task.gold,
                                       fault=kind, expected=expectation_for(kind))
                 run_task(client, registry, tool, task, outcome,
-                         session_id=f"eval-{index:02d}")
+                         session_id=f"eval-{index:02d}", reader=reader)
                 outcomes.append(outcome)
         finally:
             database.close()
 
+    usage = dict(getattr(reader, "totals", {}) or {})
     return SuiteReport(config=cfg, tasks=outcomes, faults=counter,
-                       question_digest=question_digest)
+                       question_digest=question_digest,
+                       reader_kind=getattr(reader, "kind", "scripted"),
+                       usage=usage)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -701,12 +900,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--tasks", type=int, default=8)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--fault-every", type=int, default=3)
+    parser.add_argument("--model", default="",
+                        help="真模型名（留空 = 脚本化研究者）；需要 OPENAI_BASE_URL/KEY")
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--json", dest="json_path", default="")
     parser.add_argument("--md", dest="md_path", default="")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     report = run_suite(SuiteConfig(count=args.tasks, seed=args.seed,
-                                   fault_every=args.fault_every))
+                                   fault_every=args.fault_every,
+                                   model=args.model,
+                                   temperature=args.temperature,
+                                   timeout_s=args.timeout))
     text = report.to_markdown()
     print(text)
     if args.json_path:

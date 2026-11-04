@@ -86,7 +86,10 @@ def build_research_plan(
         kind=StepKind.LLM,
         ordinal=_STEP_ORDER["verify"],
         inputs=[InputBinding(name="draft", source_kind="step_output",
-                             required=True, expected_schema={"type": "string"})],
+                             required=True, expected_schema={"type": "string"}),
+                # 核验者必须能看到草稿依据的证据：只给草稿，它只能判"没出处"
+                InputBinding(name="evidence", source_kind="step_output",
+                             required=False, expected_schema={"type": "array"})],
         outputs=[OutputSpec(name="verdict", schema={"type": "string"}),
                  OutputSpec(name="issues", schema={"type": "string"})],
         success_criteria=[_criterion("verdict_present", "json_schema",
@@ -117,7 +120,9 @@ def build_research_plan(
         kind=StepKind.VERIFY,
         ordinal=_STEP_ORDER["final_verify"],
         inputs=[InputBinding(name="draft", source_kind="step_output",
-                             required=True, expected_schema={"type": "string"})],
+                             required=True, expected_schema={"type": "string"}),
+                InputBinding(name="evidence", source_kind="step_output",
+                             required=False, expected_schema={"type": "array"})],
         outputs=[OutputSpec(name="verdict", schema={"type": "string"})],
         # 终检用可执行的布尔判据：verdict 不是 pass 就是失败，
         # 而不是"只要模型吐了个 verdict 字段就算完成"。
@@ -135,6 +140,11 @@ def build_research_plan(
 
     if with_research:
         _link("retrieve", "draft", kind=DependencyKind.DATA,
+              output_name="refs", input_name="evidence")
+        # 证据也要喂给核验与终检：判"有没有出处"的前提是让判者看到出处
+        _link("retrieve", "verify", kind=DependencyKind.DATA,
+              output_name="refs", input_name="evidence")
+        _link("retrieve", "final_verify", kind=DependencyKind.DATA,
               output_name="refs", input_name="evidence")
     _link("draft", "verify", kind=DependencyKind.DATA,
           output_name="draft", input_name="draft")
