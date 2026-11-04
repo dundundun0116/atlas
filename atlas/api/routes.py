@@ -398,6 +398,8 @@ def create_app(repository: GraphRepository,
             context_provider=lambda role, focus: graph.context_package(role, focus=focus).text,
             session_id=session_id,
             budget=replace(orchestrate_budget) if orchestrate_budget is not None else None,
+            # 给了 repository 就会把工具调用记成持久化 ToolCall（可对账、不盲重发）
+            repository=repository,
         )
         runner = PlanRunner(repository, session_id, plan_id, executor,
                             max_ticks=max(2, payload.max_steps * 4))
@@ -438,6 +440,52 @@ def create_app(repository: GraphRepository,
                 runtime_.advance_task(session_id, "fail", reason="计划推进失败")
         except RuntimeFailure:
             pass
+
+    # ---------- 工具调用与对账 ----------
+
+    @app.get("/tasks/{session_id}/tool-calls", response_model=schemas.ToolCallListView)
+    def list_tool_calls(session_id: str, status: str = "", plan_id: str = ""):
+        runtime.get_state(session_id)
+        rows = repository.tool_calls(session_id, status=status, plan_id=plan_id)
+        return schemas.ToolCallListView(
+            session_id=session_id,
+            tool_calls=[schemas.ToolCallView(**item) for item in rows],
+        )
+
+    @app.post("/tasks/{session_id}/tool-calls/{tool_call_id}/reconcile",
+              response_model=schemas.ToolCallView)
+    def reconcile_tool_call(session_id: str, tool_call_id: str,
+                            payload: schemas.ReconcileRequest):
+        """对账：能给出明确结论就落结论，给不出就留在 indeterminate（不猜）。"""
+        runtime.get_state(session_id)
+        try:
+            record = repository.get_tool_call(session_id, tool_call_id)
+        except KeyError as exc:
+            raise NotFound(str(exc), request_id=payload.request_id)
+        if record["status"] != "indeterminate":
+            raise StateConflict(
+                f"工具调用当前状态 {record['status']}，只有 indeterminate 需要对账",
+                request_id=payload.request_id,
+            )
+
+        outcome = (payload.outcome or "").strip().lower()
+        detail = payload.detail
+        if not outcome:
+            # 没给结论：用观测判定；判不了就如实记 unknowable
+            from atlas.tools.calls import decide_from_observation
+
+            decision = decide_from_observation(payload.observed, expected=payload.expected)
+            outcome = (decision.outcome.value if decision.outcome
+                       else "unknowable")
+            detail = detail or decision.detail
+        if outcome not in ("applied", "not_applied", "partially_applied", "unknowable"):
+            raise InvalidRequest(f"未知对账结论：{outcome}", request_id=payload.request_id)
+
+        repository.begin_reconcile(session_id, tool_call_id)
+        updated = repository.finish_reconcile(
+            session_id, tool_call_id, outcome=outcome, detail=detail,
+        )
+        return schemas.ToolCallView(**updated)
 
     # ---------- 读 ----------
 

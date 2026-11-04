@@ -23,6 +23,7 @@ from atlas.storage import migrations
 from atlas.storage.models import (
     LEGACY_WORKFLOW_VERSION,
     AttemptRow,
+    ToolCallRow,
     Base,
     CheckpointRow,
     ContextPackageRow,
@@ -492,6 +493,222 @@ class GraphRepository:
                 .order_by(EventRow.seq)
             ).all()
             return [dict(row.payload or {}) for row in rows]
+
+    # ---------- 工具调用（意图 → 派发 → 四档结论 → 对账） ----------
+
+    def propose_tool_call(
+        self, session_id: str, *, tool_name: str, args: Dict[str, Any],
+        step_id: str = "", plan_id: str = "", attempt_id: str = "",
+        effect_class: str = "read_only", tool_version: str = "1",
+        scope: str = "", actor: str = "dispatcher",
+    ) -> Dict[str, Any]:
+        """先落"调用意图"再派发；同一幂等键**只留一行**（重试复用，不新增）。
+
+        返回 `{"tool_call": {...}, "created": bool}`：`created=False` 表示命中了
+        已有调用（幂等去重），调用方据此决定是复用结果还是继续派发。
+        """
+        from atlas.tools.calls import args_fingerprint, canonical_args, idempotency_key
+
+        key = idempotency_key(tool_name, args, scope=scope or f"{session_id}/{step_id}")
+        fingerprint = args_fingerprint(args)
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            existing = session.scalar(
+                select(ToolCallRow).where(
+                    ToolCallRow.session_id == session_id,
+                    ToolCallRow.idempotency_key == key,
+                )
+            )
+            if existing is not None:
+                return {"tool_call": self._tool_call_row_to_dict(existing), "created": False}
+            row = ToolCallRow(
+                tool_call_id=str(uuid4()), session_id=session_id,
+                plan_id=plan_id, step_id=step_id, attempt_id=attempt_id,
+                tool_name=tool_name, tool_version=str(tool_version),
+                effect_class=str(effect_class), status="proposed",
+                canonical_args=canonical_args(args), args_fingerprint=fingerprint,
+                idempotency_key=key, result={}, error={},
+                created_at=_now(), updated_at=_now(),
+            )
+            session.add(row)
+            session.flush()
+            self._emit_event(
+                session, session_id, ev.TOOL_CALL_PROPOSED, actor,
+                ev.tool_call_proposed(row.tool_call_id, tool_name, key, str(effect_class)),
+            )
+            self._bump_version(session, session_id)
+            return {"tool_call": self._tool_call_row_to_dict(row), "created": True}
+
+    def dispatch_tool_call(self, session_id: str, tool_call_id: str, *,
+                           actor: str = "dispatcher") -> bool:
+        """原子 claim：只有仍是 proposed（或确定失败后允许重试）的调用能被派发。"""
+        from atlas.tools.calls import transition
+
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            row = session.get(ToolCallRow, tool_call_id)
+            if row is None:
+                raise KeyError(f"工具调用不存在：{tool_call_id}")
+            observed = row.status
+            if observed not in ("proposed", "failed_determinate"):
+                return False
+            target = transition(observed, "dispatched").value
+            values = {"status": target, "dispatched_at": _now(), "updated_at": _now()}
+            if observed == "failed_determinate":
+                values["retry_count"] = int(row.retry_count or 0) + 1
+            result = session.execute(
+                update(ToolCallRow)
+                .where(ToolCallRow.session_id == session_id,
+                       ToolCallRow.tool_call_id == tool_call_id,
+                       ToolCallRow.status == observed)
+                .values(**values)
+            )
+            if result.rowcount != 1:
+                return False
+            self._emit_event(
+                session, session_id, ev.TOOL_CALL_DISPATCHED, actor,
+                ev.tool_call_dispatched(tool_call_id, row.tool_name),
+            )
+            self._bump_version(session, session_id)
+            return True
+
+    def settle_tool_call(
+        self, session_id: str, tool_call_id: str, *, status: str,
+        outcome: str = "", result: Optional[Dict[str, Any]] = None,
+        error: Optional[Dict[str, Any]] = None,
+        external_operation_id: str = "", actor: str = "dispatcher",
+    ) -> Dict[str, Any]:
+        """落结论；重复落同一结论是幂等的（重复响应不算第二次副作用）。"""
+        from atlas.tools.calls import transition
+
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            row = session.get(ToolCallRow, tool_call_id)
+            if row is None:
+                raise KeyError(f"工具调用不存在：{tool_call_id}")
+            if row.status == status and (row.outcome or "") == (outcome or ""):
+                return self._tool_call_row_to_dict(row)  # 重复响应：原样返回
+            transition(row.status, status)
+            row.status = status
+            row.outcome = outcome or None
+            row.result = dict(result or {})
+            row.error = dict(error or {})
+            if external_operation_id:
+                row.external_operation_id = external_operation_id
+            row.settled_at = _now()
+            row.updated_at = _now()
+            self._emit_event(
+                session, session_id, ev.TOOL_CALL_SETTLED, actor,
+                ev.tool_call_settled(tool_call_id, status, outcome or ""),
+            )
+            self._bump_version(session, session_id)
+            return self._tool_call_row_to_dict(row)
+
+    def begin_reconcile(self, session_id: str, tool_call_id: str, *,
+                        actor: str = "reconciler") -> bool:
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            row = session.get(ToolCallRow, tool_call_id)
+            if row is None:
+                raise KeyError(f"工具调用不存在：{tool_call_id}")
+            if row.status != "indeterminate":
+                return False
+            row.status = "reconciling"
+            row.reconcile_attempts = int(row.reconcile_attempts or 0) + 1
+            row.updated_at = _now()
+            return True
+
+    def finish_reconcile(
+        self, session_id: str, tool_call_id: str, *, outcome: str,
+        detail: str = "", evidence: Optional[Dict[str, Any]] = None,
+        actor: str = "reconciler",
+    ) -> Dict[str, Any]:
+        """对账收官：给出 applied/not_applied/partially_applied/unknowable。
+
+        `unknowable` 时回到 `indeterminate` 并保持冻结——这不是失败，是"还没结论"。
+        """
+        from atlas.tools.calls import transition
+
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            row = session.get(ToolCallRow, tool_call_id)
+            if row is None:
+                raise KeyError(f"工具调用不存在：{tool_call_id}")
+            target = ("reconciled" if outcome != "unknowable" else "indeterminate")
+            transition(row.status, target)
+            row.status = target
+            row.outcome = outcome
+            row.error = {"kind": "reconcile", "message": detail,
+                         "evidence": dict(evidence or {})}
+            row.updated_at = _now()
+            if target == "reconciled":
+                row.settled_at = _now()
+            self._emit_event(
+                session, session_id, ev.TOOL_CALL_RECONCILED, actor,
+                ev.tool_call_reconciled(tool_call_id, outcome, detail),
+            )
+            self._bump_version(session, session_id)
+            return self._tool_call_row_to_dict(row)
+
+    def compensate_tool_call(
+        self, session_id: str, tool_call_id: str, *, tool_name: str,
+        args: Dict[str, Any], reason: str = "", actor: str = "reconciler",
+    ) -> Dict[str, Any]:
+        """补偿是一个**新的** ToolCall（`compensation_for` 指回原调用），不删历史。"""
+        proposed = self.propose_tool_call(
+            session_id, tool_name=tool_name, args=args,
+            step_id="", plan_id="", effect_class="external_side_effect",
+            scope=f"compensate:{tool_call_id}", actor=actor,
+        )
+        compensation_id = proposed["tool_call"]["tool_call_id"]
+        with self._tx() as session:
+            row = session.get(ToolCallRow, compensation_id)
+            if row is not None:
+                row.compensation_for = tool_call_id
+            self._emit_event(
+                session, session_id, ev.TOOL_CALL_COMPENSATED, actor,
+                ev.tool_call_compensated(tool_call_id, compensation_id, reason),
+            )
+        return self.get_tool_call(session_id, compensation_id)
+
+    def tool_calls(self, session_id: str, *, plan_id: str = "",
+                   step_id: str = "", status: str = "") -> List[Dict[str, Any]]:
+        with self._tx() as session:
+            query = select(ToolCallRow).where(ToolCallRow.session_id == session_id)
+            if plan_id:
+                query = query.where(ToolCallRow.plan_id == plan_id)
+            if step_id:
+                query = query.where(ToolCallRow.step_id == step_id)
+            if status:
+                query = query.where(ToolCallRow.status == status)
+            rows = session.scalars(query.order_by(ToolCallRow.created_at, ToolCallRow.tool_call_id)).all()
+            return [self._tool_call_row_to_dict(row) for row in rows]
+
+    def get_tool_call(self, session_id: str, tool_call_id: str) -> Dict[str, Any]:
+        with self._tx() as session:
+            row = session.get(ToolCallRow, tool_call_id)
+            if row is None or row.session_id != session_id:
+                raise KeyError(f"工具调用不存在：{tool_call_id}")
+            return self._tool_call_row_to_dict(row)
+
+    @staticmethod
+    def _tool_call_row_to_dict(row: ToolCallRow) -> Dict[str, Any]:
+        return {
+            "tool_call_id": row.tool_call_id, "plan_id": row.plan_id,
+            "step_id": row.step_id, "attempt_id": row.attempt_id,
+            "tool_name": row.tool_name, "tool_version": row.tool_version,
+            "effect_class": row.effect_class, "status": row.status,
+            "outcome": row.outcome or "",
+            "args_fingerprint": row.args_fingerprint,
+            "idempotency_key": row.idempotency_key,
+            "external_operation_id": row.external_operation_id or "",
+            "result": dict(row.result or {}), "error": dict(row.error or {}),
+            "retry_count": row.retry_count,
+            "reconcile_attempts": row.reconcile_attempts,
+            "compensation_for": row.compensation_for or "",
+            "dispatched_at": row.dispatched_at or "",
+            "settled_at": row.settled_at or "",
+        }
 
     # ---------- 上下文包（ContextPackage 下钻用） ----------
 

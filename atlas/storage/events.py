@@ -23,10 +23,19 @@ STEP_STATUS = "step_status"
 STEP_CLAIMED = "step_claimed"
 ATTEMPT_RECORDED = "attempt_recorded"
 
+# 工具调用事件：意图、派发、结论、对账、补偿各留一条（不可变）
+TOOL_CALL_PROPOSED = "tool_call_proposed"
+TOOL_CALL_DISPATCHED = "tool_call_dispatched"
+TOOL_CALL_SETTLED = "tool_call_settled"
+TOOL_CALL_RECONCILED = "tool_call_reconciled"
+TOOL_CALL_COMPENSATED = "tool_call_compensated"
+
 OPERATIONS = (
     ADD_NODE, LINK, SUPERSEDE, EXPIRE, COMPLETE_SUBTASK,
     PLAN_SAVED, PLAN_ACTIVATED, PLAN_SUPERSEDED,
     STEP_STATUS, STEP_CLAIMED, ATTEMPT_RECORDED,
+    TOOL_CALL_PROPOSED, TOOL_CALL_DISPATCHED, TOOL_CALL_SETTLED,
+    TOOL_CALL_RECONCILED, TOOL_CALL_COMPENSATED,
 )
 
 
@@ -83,6 +92,36 @@ def attempt_recorded(plan_id: str, step_id: str, attempt_id: str, number: int,
     return {
         "plan_id": plan_id, "step_id": step_id,
         "attempt_id": attempt_id, "number": number, "status": status,
+    }
+
+
+def tool_call_proposed(tool_call_id: str, tool_name: str, idempotency_key: str,
+                       effect_class: str) -> Dict[str, Any]:
+    return {
+        "tool_call_id": tool_call_id, "tool_name": tool_name,
+        "idempotency_key": idempotency_key, "effect_class": effect_class,
+    }
+
+
+def tool_call_dispatched(tool_call_id: str, tool_name: str) -> Dict[str, Any]:
+    return {"tool_call_id": tool_call_id, "tool_name": tool_name}
+
+
+def tool_call_settled(tool_call_id: str, status: str,
+                      outcome: str = "") -> Dict[str, Any]:
+    return {"tool_call_id": tool_call_id, "status": status, "outcome": outcome}
+
+
+def tool_call_reconciled(tool_call_id: str, outcome: str,
+                         detail: str = "") -> Dict[str, Any]:
+    return {"tool_call_id": tool_call_id, "outcome": outcome, "detail": detail}
+
+
+def tool_call_compensated(tool_call_id: str, compensation_id: str,
+                          reason: str = "") -> Dict[str, Any]:
+    return {
+        "tool_call_id": tool_call_id, "compensation_id": compensation_id,
+        "reason": reason,
     }
 
 

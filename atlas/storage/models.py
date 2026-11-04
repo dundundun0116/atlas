@@ -324,3 +324,43 @@ class AttemptRow(Base):
     started_at: Mapped[Optional[str]] = mapped_column(String(32))
     finished_at: Mapped[Optional[str]] = mapped_column(String(32))
     created_at: Mapped[str] = mapped_column(String(32), default=_now)
+
+
+class ToolCallRow(Base):
+    """一次外部工具调用：先记意图、再派发、再落四档结论（§4.8）。
+
+    `(session_id, idempotency_key)` 唯一——同一个逻辑操作只会有一行，
+    重试复用同一行而不是新增（这正是"不重复副作用"能让下游去重的前提）。
+    """
+
+    __tablename__ = "tool_calls"
+    __table_args__ = (
+        UniqueConstraint("session_id", "idempotency_key", name="uq_tool_calls_idem"),
+        Index("ix_tool_calls_step", "session_id", "plan_id", "step_id"),
+    )
+
+    tool_call_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("sessions.session_id", ondelete="CASCADE")
+    )
+    plan_id: Mapped[str] = mapped_column(String(36), default="")
+    step_id: Mapped[str] = mapped_column(String(64), default="")
+    attempt_id: Mapped[str] = mapped_column(String(36), default="")
+    tool_name: Mapped[str] = mapped_column(String(64), default="")
+    tool_version: Mapped[str] = mapped_column(String(32), default="")
+    effect_class: Mapped[str] = mapped_column(String(24), default="read_only")
+    status: Mapped[str] = mapped_column(String(24), default="proposed")
+    outcome: Mapped[Optional[str]] = mapped_column(String(24))
+    canonical_args: Mapped[str] = mapped_column(Text, default="")
+    args_fingerprint: Mapped[str] = mapped_column(String(64), default="")
+    idempotency_key: Mapped[str] = mapped_column(String(160), default="")
+    external_operation_id: Mapped[str] = mapped_column(String(128), default="")
+    result: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    error: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    reconcile_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    compensation_for: Mapped[Optional[str]] = mapped_column(String(36))
+    dispatched_at: Mapped[Optional[str]] = mapped_column(String(32))
+    settled_at: Mapped[Optional[str]] = mapped_column(String(32))
+    created_at: Mapped[str] = mapped_column(String(32), default=_now)
+    updated_at: Mapped[str] = mapped_column(String(32), default=_now)

@@ -156,6 +156,10 @@ class PlanRunner:
             return
         context = dict(self.context_provider(step) or {})
         context["inputs"] = self._resolve_inputs(plan, step, self._step_outputs())
+        context["scope"] = {
+            "session_id": self.session_id, "plan_id": self.plan_id,
+            "step_id": step.step_id,
+        }
         try:
             outcome = self.executor(step, context)
         except Exception as exc:  # 执行器炸了：确定"没拿到结果"，不是 indeterminate
@@ -235,6 +239,10 @@ class PlanRunner:
                 continue
             context = dict(self.context_provider(step) or {})
             context["inputs"] = self._resolve_inputs(plan, step, self._step_outputs())
+            context["scope"] = {
+                "session_id": self.session_id, "plan_id": self.plan_id,
+                "step_id": step.step_id,
+            }
             try:
                 outcome = self.executor(step, context)
             except Exception as exc:

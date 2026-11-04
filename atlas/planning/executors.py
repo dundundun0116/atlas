@@ -22,6 +22,8 @@ from atlas.orchestration.orchestrator import (
 )
 from atlas.planning.policies_call import call_model
 from atlas.planning.runner import StepOutcome
+from atlas.tools.calls import EffectClass, ToolSpec
+from atlas.tools.dispatcher import ToolDispatcher
 from atlas.tools.protocol import ResearchRequest, ResearchResult, ResearchToolError
 
 
@@ -40,6 +42,7 @@ class ResearchStepExecutor:
         budget_tokens: int = 4000,
         max_rounds: int = 2,
         budget: Optional[Budget] = None,
+        repository: Any = None,
     ):
         self.llm = llm
         self.problem = problem
@@ -50,11 +53,14 @@ class ResearchStepExecutor:
         self.budget_tokens = budget_tokens
         self.max_rounds = max_rounds
         self.budget = budget
+        # 给了 repository 就把工具调用记成持久化 ToolCall（可对账、崩溃后不重发）
+        self.repository = repository
 
     # ---------- 分派 ----------
 
     def __call__(self, step, context: Dict[str, Any]) -> StepOutcome:
         handler = getattr(self, f"_do_{step.step_id}", None)
+        scope = dict(context.get("scope") or {})
         if handler is None:
             return StepOutcome(status="failed", error={
                 "kind": "unknown_step", "message": f"没有执行器处理 step {step.step_id!r}"})
@@ -73,11 +79,13 @@ class ResearchStepExecutor:
                 "kind": "missing_inputs",
                 "message": f"缺少必填输入：{absent}",
             })
+        if step.step_id == "retrieve":
+            return handler(step, inputs, scope)
         return handler(step, inputs)
 
     # ---------- 各步 ----------
 
-    def _do_retrieve(self, step, inputs: Dict[str, Any]) -> StepOutcome:
+    def _do_retrieve(self, step, inputs: Dict[str, Any], scope: Dict[str, Any] = None) -> StepOutcome:
         if self.research_tool is None:
             return StepOutcome(status="failed", error={
                 "kind": "tool_unavailable", "message": "本部署没有配置 ResearchTool"})
@@ -92,25 +100,55 @@ class ResearchStepExecutor:
         except ValueError as exc:
             return StepOutcome(status="failed", error={
                 "kind": "invalid_request", "message": str(exc)})
-        try:
+
+        def call() -> Dict[str, Any]:
             result = self.research_tool.research(request)
-        except ResearchToolError as exc:
-            # 工具失败是"确定没拿到结果"，不是 unknown：可以重试/重规划。
-            return StepOutcome(status="failed", error={
-                "kind": str(exc.kind), "message": str(exc.message),
-                "trace_id": exc.trace_id})
-        if not isinstance(result, ResearchResult):
-            try:
+            if not isinstance(result, ResearchResult):
                 result = ResearchResult.from_dict(result)
+            return {
+                "refs": [item.to_dict() for item in result.evidence],
+                "answer": result.answer,
+                "stop_reason": result.stop_reason,
+                "research_trace_id": result.trace_id,
+            }
+
+        scope = dict(scope or {})
+        if self.repository is None or not scope.get("session_id"):
+            # 没有持久化上下文：直接调，工具失败是"确定失败"
+            try:
+                return StepOutcome(output=call())
+            except ResearchToolError as exc:
+                return StepOutcome(status="failed", error={
+                    "kind": str(exc.kind), "message": str(exc.message),
+                    "trace_id": exc.trace_id})
             except (TypeError, ValueError) as exc:
                 return StepOutcome(status="failed", error={
                     "kind": "invalid_result", "message": str(exc)})
-        return StepOutcome(output={
-            "refs": [item.to_dict() for item in result.evidence],
-            "answer": result.answer,
-            "stop_reason": result.stop_reason,
-            "research_trace_id": result.trace_id,
+
+        spec = ToolSpec(
+            name=str(step.tool_name or "compassrag"),
+            version="1",
+            effect_class=EffectClass.READ_ONLY,
+            supports_idempotency=False,
+            supports_lookup=False,
+        )
+        dispatcher = ToolDispatcher(
+            self.repository, scope["session_id"], spec,
+            plan_id=str(scope.get("plan_id") or ""),
+            step_id=str(scope.get("step_id") or ""),
+        )
+        outcome = dispatcher.invoke(call, {
+            "query": request.query,
+            "subtask_id": request.subtask_id,
+            "budget_tokens": request.budget_tokens,
+            "max_rounds": request.max_rounds,
         })
+        if outcome.ok:
+            return StepOutcome(output=dict(outcome.result or {}))
+        if outcome.needs_human:
+            # 结果未知：冻结这一步等对账/人工，绝不自动重发
+            return StepOutcome(status="indeterminate", error=dict(outcome.error or {}))
+        return StepOutcome(status="failed", error=dict(outcome.error or {}))
 
     def _do_draft(self, step, inputs: Dict[str, Any]) -> StepOutcome:
         evidence = self._evidence_block(inputs.get("evidence"))

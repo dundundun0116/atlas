@@ -185,6 +185,41 @@ class PlanAdvanceView(BaseModel):
     steps: List[StepView] = Field(default_factory=list)
 
 
+class ToolCallView(BaseModel):
+    """一次外部工具调用：四档结论与对账痕迹。"""
+
+    tool_call_id: str
+    tool_name: str = ""
+    plan_id: str = ""
+    step_id: str = ""
+    effect_class: str = ""
+    status: str = ""
+    outcome: str = ""
+    idempotency_key: str = ""
+    args_fingerprint: str = ""
+    retry_count: int = 0
+    reconcile_attempts: int = 0
+    compensation_for: str = ""
+    result: Dict[str, Any] = Field(default_factory=dict)
+    error: Dict[str, Any] = Field(default_factory=dict)
+    dispatched_at: str = ""
+    settled_at: str = ""
+
+
+class ToolCallListView(BaseModel):
+    session_id: str
+    tool_calls: List[ToolCallView] = Field(default_factory=list)
+
+
+class ReconcileRequest(RequestMeta):
+    """人工/自动对账：给出确定结论，或提供读回观测让系统判定。"""
+
+    outcome: str = ""          # applied / not_applied / partially_applied / unknowable
+    observed: Optional[Any] = None
+    expected: Optional[Any] = None
+    detail: str = ""
+
+
 class NodeView(BaseModel):
     id: str
     type: str
