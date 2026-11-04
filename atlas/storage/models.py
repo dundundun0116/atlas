@@ -145,6 +145,10 @@ class CheckpointRow(Base):
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     # 状态机快照是完整 JSON，长度随历史增长，不应受 64 字符限制。
     context_digest_version: Mapped[str] = mapped_column(Text, default="")
+    # §4.13：恢复要知道"哪些 Step 还没收敛、哪些工具调用在途、预算还剩多少"
+    pending_step_ids: Mapped[list] = mapped_column(JSON, default=list)
+    in_flight_tool_call_ids: Mapped[list] = mapped_column(JSON, default=list)
+    budget_snapshot: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[str] = mapped_column(String(32), default=_now)
 
 

@@ -148,11 +148,85 @@ def _render_research_traces(traces: List[Dict[str, Any]], base_url: str) -> str:
     )
 
 
+_STEP_BADGE = {
+    "done": "✅", "failed": "❌", "needs_human": "🙋", "stale": "♻️",
+    "running": "▶️", "dispatched": "📤", "verifying": "🔍",
+    "blocked": "⛔", "pending": "⏳", "ready": "🟢", "skipped": "⏭️",
+}
+
+
+def _render_plan(plan: Dict[str, Any] | None) -> str:
+    """计划区：revision / 状态 / 每个 Step 的状态与尝试次数（恢复点就在这一层）。"""
+    if not plan:
+        return ('<p class="muted">这个任务没有激活的计划（走的是 legacy 固定流程）。</p>')
+    meta = plan.get("plan") or {}
+    steps = plan.get("steps") or []
+    rows = []
+    for step in steps:
+        badge = _STEP_BADGE.get(step.get("status", ""), "•")
+        reason = step.get("status_reason") or step.get("stale_reason") or ""
+        rows.append(
+            "<tr>"
+            f"<td><code>{_e(step.get('step_id'))}</code></td>"
+            f"<td>{_e(step.get('title'))}</td>"
+            f"<td>{_e(step.get('kind'))}</td>"
+            f"<td>{badge} {_e(step.get('status'))}</td>"
+            f"<td>{_e(step.get('attempt_count', 0))}</td>"
+            f"<td class=\"muted\">{_e(reason)}</td>"
+            "</tr>"
+        )
+    dependencies = plan.get("dependencies") or []
+    dep_text = "、".join(
+        f"{_e(item.get('from_step_id'))}→{_e(item.get('to_step_id'))}"
+        + (f"({_e((item.get('binding') or {}).get('output_name'))}→"
+           f"{_e((item.get('binding') or {}).get('input_name'))})"
+           if item.get("binding") else "")
+        for item in dependencies
+    ) or '<span class="muted">无依赖</span>'
+    return f"""<div class="sub">计划 <code>{_e(meta.get('plan_id'))}</code>
+ · revision {_e(meta.get('revision'))} · 状态 {_e(meta.get('status'))}
+ · 校验器 {_e(meta.get('validator_version'))}</div>
+<table><thead><tr><th>Step</th><th>标题</th><th>类型</th><th>状态</th><th>尝试</th><th>说明</th></tr></thead>
+<tbody>{''.join(rows)}</tbody></table>
+<p class="sub">依赖：{dep_text}</p>"""
+
+
+def _render_tool_calls(calls: List[Dict[str, Any]]) -> str:
+    """工具调用区：四档结论与对账痕迹——"结果未知"必须一眼看得出来。"""
+    if not calls:
+        return '<p class="muted">这个任务没有外部工具调用记录。</p>'
+    rows = []
+    for call in calls:
+        status = str(call.get("status", ""))
+        tone = ("class=\"muted\"" if status == "settled"
+                else "style=\"font-weight:600\"" if status in ("indeterminate", "reconciling")
+                else "")
+        rows.append(
+            "<tr>"
+            f"<td><code>{_e(call.get('tool_name'))}</code></td>"
+            f"<td>{_e(call.get('step_id'))}</td>"
+            f"<td {tone}>{_e(status)}</td>"
+            f"<td>{_e(call.get('outcome'))}</td>"
+            f"<td>{_e(call.get('retry_count', 0))}</td>"
+            f"<td>{_e(call.get('reconcile_attempts', 0))}</td>"
+            f"<td><code>{_e(str(call.get('idempotency_key', ''))[:28])}…</code></td>"
+            "</tr>"
+        )
+    unknown = sum(1 for call in calls if call.get("status") in ("indeterminate", "reconciling"))
+    note = (f'<p class="sub">其中 {unknown} 个调用结果未知，需要先对账再决定是否重发。</p>'
+            if unknown else "")
+    return f"""<table><thead><tr><th>工具</th><th>Step</th><th>状态</th><th>结论</th>
+<th>重试</th><th>对账</th><th>幂等键</th></tr></thead>
+<tbody>{''.join(rows)}</tbody></table>{note}"""
+
+
 def render_task_report(
     *, state: Dict[str, Any], trace: Dict[str, Any], replay: Dict[str, Any],
     nodes: List[Any], research_base_url: str = "", title: str = "Atlas 任务报告",
+    plan: Dict[str, Any] | None = None,
+    tool_calls: List[Dict[str, Any]] | None = None,
 ) -> str:
-    """渲染一页静态 HTML：状态 / 角色 / 证据 / CompassRAG trace 关联 / 时间线。"""
+    """渲染一页静态 HTML：状态 / 计划 / 工具调用 / 角色 / 证据 / trace / 时间线。"""
     summary = trace.get("summary") or {}
     traces = _collect_research_traces(nodes)
     active = sum(1 for n in nodes if getattr(n, "status", "") == "active")
@@ -174,6 +248,12 @@ def render_task_report(
   <div class="card"><b>{len(traces)}</b><span>CompassRAG 研究轨迹</span></div>
   <div class="card"><b>{'OK' if replay.get('ok') else '异常'}</b><span>事件回放</span></div>
 </div>
+
+<h2>计划与步骤</h2>
+{_render_plan(plan)}
+
+<h2>工具调用与对账</h2>
+{_render_tool_calls(list(tool_calls or []))}
 
 <h2>角色步骤</h2>
 {_render_roles(nodes)}

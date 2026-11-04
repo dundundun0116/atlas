@@ -18,7 +18,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 #: 当前代码期望的 schema 版本；每次改动 `ADDITIVE_COLUMNS` 就 +1。
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: (表名, 列名, 列 DDL)。只允许新增列，且必须自带 DEFAULT。
 ADDITIVE_COLUMNS: Tuple[Tuple[str, str, str], ...] = (
@@ -27,6 +27,11 @@ ADDITIVE_COLUMNS: Tuple[Tuple[str, str, str], ...] = (
         "workflow_version",
         "VARCHAR(32) NOT NULL DEFAULT 'legacy_research_v1'",
     ),
+    # §4.13 的 checkpoint 扩展：旧库补列后，旧 checkpoint 只是"这三项为空"，
+    # 恢复逻辑必须把空列表当成"没有未完成 Step"而不是"未知"。
+    ("checkpoints", "pending_step_ids", "TEXT NOT NULL DEFAULT '[]'"),
+    ("checkpoints", "in_flight_tool_call_ids", "TEXT NOT NULL DEFAULT '[]'"),
+    ("checkpoints", "budget_snapshot", "TEXT NOT NULL DEFAULT '{}'"),
 )
 
 _MIGRATION_TABLE = "schema_migrations"

@@ -247,6 +247,10 @@ class CheckpointView(BaseModel):
     pending_role: str
     retry_count: int = 0
     context_digest_version: str = ""
+    #: §4.13：恢复要知道哪些 Step 还没收敛、哪些外部调用在途、预算还剩多少
+    pending_step_ids: List[str] = Field(default_factory=list)
+    in_flight_tool_call_ids: List[str] = Field(default_factory=list)
+    budget_snapshot: Dict[str, Any] = Field(default_factory=dict)
     created_at: str = ""
 
 

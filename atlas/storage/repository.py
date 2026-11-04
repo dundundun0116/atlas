@@ -388,6 +388,9 @@ class GraphRepository:
         pending_role: str = "",
         retry_count: int = 0,
         context_digest_version: str = "",
+        pending_step_ids: Optional[List[str]] = None,
+        in_flight_tool_call_ids: Optional[List[str]] = None,
+        budget_snapshot: Optional[Dict[str, Any]] = None,
     ) -> CheckpointRow:
         with self._tx() as session:
             self._require_session(session, session_id)
@@ -399,6 +402,9 @@ class GraphRepository:
                 pending_role=pending_role,
                 retry_count=retry_count,
                 context_digest_version=context_digest_version,
+                pending_step_ids=list(pending_step_ids or []),
+                in_flight_tool_call_ids=list(in_flight_tool_call_ids or []),
+                budget_snapshot=dict(budget_snapshot or {}),
                 created_at=_now(),
             )
             session.add(row)

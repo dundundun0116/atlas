@@ -96,3 +96,55 @@ def test_fresh_database_records_schema_version(tmp_path):
         assert schema_version(database.engine) == SCHEMA_VERSION
     finally:
         database.close()
+
+
+def test_old_checkpoints_table_gets_recovery_columns(tmp_path):
+    """§4.13 的三个恢复字段必须能补进旧库，且旧行的默认值语义明确。"""
+    path = tmp_path / "old_checkpoint.db"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE sessions (
+            session_id VARCHAR(64) NOT NULL PRIMARY KEY,
+            goal TEXT, actor VARCHAR(32), state VARCHAR(24),
+            graph_version INTEGER, created_at VARCHAR(32), updated_at VARCHAR(32)
+        );
+        CREATE TABLE checkpoints (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            checkpoint_id VARCHAR(36) NOT NULL UNIQUE,
+            session_id VARCHAR(64) NOT NULL,
+            task_state VARCHAR(24), graph_version INTEGER,
+            pending_role VARCHAR(24), retry_count INTEGER,
+            context_digest_version TEXT, created_at VARCHAR(32)
+        );
+        INSERT INTO sessions VALUES ('s1','旧目标','main','active',1,
+            '2026-01-01T00:00:00','2026-01-01T00:00:00');
+        INSERT INTO checkpoints (checkpoint_id, session_id, task_state, graph_version,
+            pending_role, retry_count, context_digest_version, created_at)
+        VALUES ('cp1','s1','running',1,'worker',0,'','2026-01-01T00:00:00');
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    database = open_database(path)
+    try:
+        columns = _columns(path, "checkpoints")
+        assert {"pending_step_ids", "in_flight_tool_call_ids",
+                "budget_snapshot"} <= columns
+        # sessions 表是老 schema，所以 workflow_version 也一并补上
+        assert database.migration_report["added_columns"] == [
+            "sessions.workflow_version",
+            "checkpoints.pending_step_ids",
+            "checkpoints.in_flight_tool_call_ids",
+            "checkpoints.budget_snapshot",
+        ]
+        # 旧 checkpoint 补列后必须是"空"而不是"未知"
+        repository = GraphRepository(database)
+        row = repository.latest_checkpoint("s1")
+        assert list(row.pending_step_ids or []) == []
+        assert list(row.in_flight_tool_call_ids or []) == []
+        assert dict(row.budget_snapshot or {}) == {}
+        assert schema_version(database.engine) == SCHEMA_VERSION
+    finally:
+        database.close()

@@ -272,6 +272,29 @@ class AgentRuntime:
         if artifacts:
             lines.append("产出物:")
             lines += [f"  - [{a.id}] {a.content}" for a in artifacts]
+        plan_id = self.repository.active_plan_id(session_id)
+        if plan_id:
+            detail = self.repository.plan_detail(session_id, plan_id)
+            meta = detail["plan"]
+            lines.append(f"计划: {plan_id} rev{meta['revision']} ({meta['status']})")
+            for step in detail["steps"]:
+                note = step["status_reason"] or step["stale_reason"]
+                suffix = f" — {note}" if note else ""
+                lines.append(
+                    f"  - {step['step_id']} [{step['status']}] "
+                    f"尝试 {step['attempt_count']}{suffix}"
+                )
+        calls = self.repository.tool_calls(session_id)
+        if calls:
+            lines.append("工具调用:")
+            for call in calls:
+                outcome = call["outcome"] or "-"
+                lines.append(
+                    f"  - {call['tool_name']}/{call['step_id'] or '-'} "
+                    f"[{call['status']}] {outcome}"
+                    + (f" 重试 {call['retry_count']}" if call["retry_count"] else "")
+                    + (f" 对账 {call['reconcile_attempts']}" if call["reconcile_attempts"] else "")
+                )
         if runtime.machine is not None and runtime.machine.failure_reason:
             lines.append(f"失败原因: {runtime.machine.failure_reason}")
         return {
@@ -314,6 +337,8 @@ class AgentRuntime:
                     "graph_version": checkpoint.graph_version,
                     "pending_role": checkpoint.pending_role,
                     "retry_count": checkpoint.retry_count,
+                    "pending_step_ids": list(checkpoint.pending_step_ids or []),
+                    "in_flight_tool_call_ids": list(checkpoint.in_flight_tool_call_ids or []),
                     "created_at": checkpoint.created_at,
                 }
                 if checkpoint is not None

@@ -369,7 +369,11 @@ class ServiceRuntime:
         retry_count: int = 0,
         context_digest_version: str = "",
     ):
-        """存检查点；给了状态机就自动带上它的状态与快照。"""
+        """存检查点；除了状态机快照，还带上"还没收敛的 Step / 在途工具调用 / 预算"。
+
+        这三项是 §4.13 的要求：恢复时如果不知道哪些 step 没做完、哪些外部调用在途，
+        就只能整段重来或者重复副作用——正是长程任务最贵的两种失败。
+        """
         resolved_state = task_state or (
             self.machine.state.value if self.machine is not None else "running"
         )
@@ -383,7 +387,41 @@ class ServiceRuntime:
             pending_role=pending_role,
             retry_count=retry_count,
             context_digest_version=digest,
+            pending_step_ids=self.pending_step_ids(),
+            in_flight_tool_call_ids=self.in_flight_tool_call_ids(),
+            budget_snapshot=self.budget_snapshot(),
         )
+
+    # ---------- 恢复所需的三个快照 ----------
+
+    def pending_step_ids(self) -> List[str]:
+        """当前激活计划里还没收敛的 Step（done/skipped/cancelled 之外全算）。"""
+        try:
+            plan_id = self.repository.active_plan_id(self.session_id)
+        except Exception:  # 没有计划层（legacy 路径）时不该让 checkpoint 失败
+            return []
+        if not plan_id:
+            return []
+        settled = {"done", "skipped", "cancelled"}
+        statuses = self.repository.step_statuses(self.session_id, plan_id)
+        return sorted(step_id for step_id, status in statuses.items()
+                      if status not in settled)
+
+    def in_flight_tool_call_ids(self) -> List[str]:
+        """还没拿到确定结论的工具调用（含对账中）——恢复时绝不能当"没发生"。"""
+        try:
+            calls = self.repository.tool_calls(self.session_id)
+        except Exception:
+            return []
+        in_flight = {"dispatched", "indeterminate", "reconciling", "compensating"}
+        return sorted(
+            call["tool_call_id"] for call in calls
+            if call.get("status") in in_flight
+        )
+
+    def budget_snapshot(self) -> dict:
+        budget = getattr(self.machine, "budget", None) if self.machine is not None else None
+        return budget.to_dict() if budget is not None and hasattr(budget, "to_dict") else {}
 
     def known_ids(self) -> set[str]:
         """本会话在 repository 里的真实节点 id，供编排器做严格引用校验。"""
@@ -403,6 +441,9 @@ class ServiceRuntime:
                     "pending_role": row.pending_role,
                     "retry_count": row.retry_count,
                     "context_digest_version": row.context_digest_version,
+                    "pending_step_ids": list(row.pending_step_ids or []),
+                    "in_flight_tool_call_ids": list(row.in_flight_tool_call_ids or []),
+                    "budget_snapshot": dict(row.budget_snapshot or {}),
                     "created_at": row.created_at,
                 }
                 if row is not None
