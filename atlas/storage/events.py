@@ -15,7 +15,19 @@ SUPERSEDE = "supersede"
 EXPIRE = "expire"
 COMPLETE_SUBTASK = "complete_subtask"
 
-OPERATIONS = (ADD_NODE, LINK, SUPERSEDE, EXPIRE, COMPLETE_SUBTASK)
+# 执行状态事件（计划/Step/Attempt）：与知识图事件同表同 seq，但语义分开。
+PLAN_SAVED = "plan_saved"
+PLAN_ACTIVATED = "plan_activated"
+PLAN_SUPERSEDED = "plan_superseded"
+STEP_STATUS = "step_status"
+STEP_CLAIMED = "step_claimed"
+ATTEMPT_RECORDED = "attempt_recorded"
+
+OPERATIONS = (
+    ADD_NODE, LINK, SUPERSEDE, EXPIRE, COMPLETE_SUBTASK,
+    PLAN_SAVED, PLAN_ACTIVATED, PLAN_SUPERSEDED,
+    STEP_STATUS, STEP_CLAIMED, ATTEMPT_RECORDED,
+)
 
 
 def node_added(node_id: str, type_: str, content: str, actor: str) -> Dict[str, Any]:
@@ -36,6 +48,42 @@ def node_expired(node_id: str, reason: str = "") -> Dict[str, Any]:
 
 def subtask_completed(node_id: str) -> Dict[str, Any]:
     return {"node_id": node_id}
+
+
+def plan_saved(plan_id: str, revision: int, step_ids: List[str],
+               validator_version: str = "", status: str = "proposed") -> Dict[str, Any]:
+    return {
+        "plan_id": plan_id, "revision": revision, "step_ids": list(step_ids),
+        "validator_version": validator_version, "status": status,
+    }
+
+
+def plan_activated(plan_id: str, revision: int, superseded: str = "") -> Dict[str, Any]:
+    return {"plan_id": plan_id, "revision": revision, "superseded_plan_id": superseded}
+
+
+def plan_superseded(plan_id: str, by_plan_id: str, reason: str = "") -> Dict[str, Any]:
+    return {"plan_id": plan_id, "superseded_by": by_plan_id, "reason": reason}
+
+
+def step_status_changed(plan_id: str, step_id: str, from_status: str, to_status: str,
+                        reason: str = "") -> Dict[str, Any]:
+    return {
+        "plan_id": plan_id, "step_id": step_id,
+        "from": from_status, "to": to_status, "reason": reason,
+    }
+
+
+def step_claimed(plan_id: str, step_id: str, from_status: str) -> Dict[str, Any]:
+    return {"plan_id": plan_id, "step_id": step_id, "from": from_status}
+
+
+def attempt_recorded(plan_id: str, step_id: str, attempt_id: str, number: int,
+                     status: str) -> Dict[str, Any]:
+    return {
+        "plan_id": plan_id, "step_id": step_id,
+        "attempt_id": attempt_id, "number": number, "status": status,
+    }
 
 
 def replay(events: Iterable[EventRow]) -> Dict[str, Dict[str, Any]]:

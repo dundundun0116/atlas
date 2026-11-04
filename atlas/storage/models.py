@@ -199,3 +199,128 @@ class ContextPackageRow(Base):
     warnings: Mapped[list] = mapped_column(JSON, default=list)
     degraded: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[str] = mapped_column(String(32), default=_now)
+
+
+# --------------------------------------------------------------------------- #
+# 计划作为一等状态（设计文档 §4.3–4.7 / §9.1）
+#
+# 与知识图分表：`plans/steps/dependencies/attempts` 是**执行状态**，
+# `nodes/edges` 是**知识状态**。两者可以同库，但字段、写入 API、生命周期必须分开——
+# 执行依赖绝不复用 `EdgeRow`（§4.6 明确要求）。
+# --------------------------------------------------------------------------- #
+
+
+class PlanRow(Base):
+    """一份计划 revision；同一 session 同一时刻只能有一个 active plan。"""
+
+    __tablename__ = "plans"
+    __table_args__ = (
+        UniqueConstraint("session_id", "revision", name="uq_plans_revision"),
+        Index("ix_plans_session_status", "session_id", "status"),
+    )
+
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("sessions.session_id", ondelete="CASCADE"), primary_key=True
+    )
+    plan_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    parent_plan_id: Mapped[Optional[str]] = mapped_column(String(36))
+    status: Mapped[str] = mapped_column(String(16), default="proposed")
+    strategy: Mapped[str] = mapped_column(String(16), default="dag")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    spec: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    validation_report: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    validator_version: Mapped[str] = mapped_column(String(32), default="")
+    generated_by: Mapped[str] = mapped_column(String(64), default="model")
+    estimated_budget: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[str] = mapped_column(String(32), default=_now)
+    activated_at: Mapped[Optional[str]] = mapped_column(String(32))
+    superseded_at: Mapped[Optional[str]] = mapped_column(String(32))
+
+
+class StepRow(Base):
+    """一个 Step 的**当前**状态；spec 里的静态定义不随状态变化。"""
+
+    __tablename__ = "steps"
+    __table_args__ = (
+        Index("ix_steps_session_plan_status", "session_id", "plan_id", "status"),
+    )
+
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("sessions.session_id", ondelete="CASCADE"), primary_key=True
+    )
+    plan_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    step_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    ordinal: Mapped[int] = mapped_column(Integer, default=0)
+    kind: Mapped[str] = mapped_column(String(16), default="llm")
+    title: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="blocked")
+    tool_name: Mapped[str] = mapped_column(String(64), default="")
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=1)
+    input_fingerprint: Mapped[str] = mapped_column(String(64), default="")
+    latest_attempt_id: Mapped[Optional[str]] = mapped_column(String(36))
+    status_reason: Mapped[str] = mapped_column(Text, default="")
+    stale_reason: Mapped[str] = mapped_column(Text, default="")
+    failure: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    spec: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[str] = mapped_column(String(32), default=_now)
+    updated_at: Mapped[str] = mapped_column(String(32), default=_now)
+    started_at: Mapped[Optional[str]] = mapped_column(String(32))
+    completed_at: Mapped[Optional[str]] = mapped_column(String(32))
+
+
+class DependencyRow(Base):
+    """执行依赖（order / data / verify）；一条 `data` 边必须带 binding。"""
+
+    __tablename__ = "dependencies"
+    __table_args__ = (
+        UniqueConstraint("session_id", "plan_id", "from_step_id", "to_step_id", "kind",
+                         name="uq_dependencies_edge"),
+        Index("ix_dependencies_session_plan", "session_id", "plan_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dependency_id: Mapped[str] = mapped_column(String(36), unique=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("sessions.session_id", ondelete="CASCADE")
+    )
+    plan_id: Mapped[str] = mapped_column(String(36))
+    from_step_id: Mapped[str] = mapped_column(String(64))
+    to_step_id: Mapped[str] = mapped_column(String(64))
+    kind: Mapped[str] = mapped_column(String(16), default="order")
+    binding: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    condition: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[str] = mapped_column(String(32), default=_now)
+
+
+class AttemptRow(Base):
+    """一次 Step 执行尝试；重试**追加新行**，不覆盖旧尝试（§4.7）。"""
+
+    __tablename__ = "attempts"
+    __table_args__ = (
+        UniqueConstraint("session_id", "plan_id", "step_id", "number", name="uq_attempts_number"),
+        Index("ix_attempts_step", "session_id", "plan_id", "step_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    attempt_id: Mapped[str] = mapped_column(String(36), unique=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("sessions.session_id", ondelete="CASCADE")
+    )
+    plan_id: Mapped[str] = mapped_column(String(36))
+    step_id: Mapped[str] = mapped_column(String(64))
+    number: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(16), default="created")
+    trigger: Mapped[str] = mapped_column(String(16), default="initial")
+    input_fingerprint: Mapped[str] = mapped_column(String(64), default="")
+    context_digest: Mapped[str] = mapped_column(String(64), default="")
+    output: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    error: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    verification: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    usage: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    trace_id: Mapped[str] = mapped_column(String(64), default="")
+    started_at: Mapped[Optional[str]] = mapped_column(String(32))
+    finished_at: Mapped[Optional[str]] = mapped_column(String(32))
+    created_at: Mapped[str] = mapped_column(String(32), default=_now)

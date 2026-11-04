@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
 from uuid import uuid4
 
-from sqlalchemy import create_engine, event as sa_event, func, select
+from sqlalchemy import create_engine, event as sa_event, func, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -22,14 +22,18 @@ from atlas.storage import events as ev
 from atlas.storage import migrations
 from atlas.storage.models import (
     LEGACY_WORKFLOW_VERSION,
+    AttemptRow,
     Base,
     CheckpointRow,
     ContextPackageRow,
+    DependencyRow,
     EdgeRow,
     EventRow,
     NodeRow,
+    PlanRow,
     RunMetricRow,
     SessionRow,
+    StepRow,
     _now,
 )
 
@@ -528,6 +532,361 @@ class GraphRepository:
                 for row in selected
             ]
 
+
+    # ---------- 计划 / Step / 依赖（执行状态，与知识图分表） ----------
+
+    def save_plan(
+        self,
+        session_id: str,
+        plan: "PlanSpec",
+        *,
+        status: str = "proposed",
+        validation_report: Optional[Dict[str, Any]] = None,
+        generated_by: str = "",
+        reason: str = "",
+        plan_id: str = "",
+        actor: str = "planner",
+    ) -> Dict[str, Any]:
+        """一份计划 + 它的 Step/Dependency 在**同一事务**里落库并写事件。
+
+        revision 由库内自增（同一 session 内唯一）；plan_id 缺省是 `P<revision>`。
+        """
+        from atlas.planning.schemas import PlanSpec, StepStatus  # 局部导入避免循环
+
+        if not isinstance(plan, PlanSpec):
+            raise TypeError("save_plan 需要 PlanSpec（先用 PlanSpec.from_dict 解析）")
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            revision = self._next_plan_revision(session, session_id)
+            pid = plan_id or f"P{revision}"
+            session.add(PlanRow(
+                session_id=session_id, plan_id=pid, revision=revision,
+                parent_plan_id=plan.parent_plan_id or None,
+                status=str(status), strategy=plan.strategy, summary=plan.summary,
+                spec=plan.to_dict(), validation_report=dict(validation_report or {}),
+                validator_version=str((validation_report or {}).get("validator_version", "")),
+                generated_by=generated_by or plan.generated_by,
+                estimated_budget=dict(plan.estimated_budget),
+                reason=reason or plan.reason, created_at=_now(),
+            ))
+            targets = {item.to_step_id for item in plan.dependencies}
+            for spec in plan.steps:
+                initial = (StepStatus.BLOCKED if spec.step_id in targets
+                           else StepStatus.PENDING)
+                session.add(StepRow(
+                    session_id=session_id, plan_id=pid, step_id=spec.step_id,
+                    ordinal=spec.ordinal, kind=spec.kind.value, title=spec.title,
+                    status=initial.value, tool_name=spec.tool_name,
+                    max_attempts=spec.max_attempts,
+                    spec=spec.to_dict(), created_at=_now(), updated_at=_now(),
+                ))
+            for dependency in plan.dependencies:
+                session.add(DependencyRow(
+                    dependency_id=str(uuid4()), session_id=session_id, plan_id=pid,
+                    from_step_id=dependency.from_step_id,
+                    to_step_id=dependency.to_step_id,
+                    kind=dependency.kind.value,
+                    binding=dict(dependency.binding or {}),
+                    condition=dict(dependency.condition),
+                    created_at=_now(),
+                ))
+            session.flush()
+            self._emit_event(
+                session, session_id, ev.PLAN_SAVED, actor,
+                ev.plan_saved(pid, revision, plan.step_ids,
+                              str((validation_report or {}).get("validator_version", "")),
+                              str(status)),
+            )
+            self._bump_version(session, session_id)
+        return self.plan_detail(session_id, pid)
+
+    def activate_plan(self, session_id: str, plan_id: str, *,
+                      actor: str = "planner") -> Dict[str, Any]:
+        """激活一份计划；同一 session 里旧 active plan 一并转 superseded（不可两真源）。"""
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            target = session.get(PlanRow, (session_id, plan_id))
+            if target is None:
+                raise KeyError(f"计划不存在：{plan_id}")
+            if target.status in ("superseded", "rejected"):
+                raise ValueError(f"计划 {plan_id} 当前状态 {target.status}，不能激活")
+            # 校验没过的计划绝不允许激活：非法环、悬空引用、预算不可行都在这里被挡住。
+            report = dict(target.validation_report or {})
+            if report and report.get("activatable") is False:
+                codes = sorted({item.get("code", "") for item in report.get("issues", [])})
+                raise ValueError(f"计划 {plan_id} 未通过校验，不能激活：{codes}")
+            previous = session.scalars(
+                select(PlanRow).where(
+                    PlanRow.session_id == session_id,
+                    PlanRow.status == "active",
+                    PlanRow.plan_id != plan_id,
+                )
+            ).all()
+            superseded_ids: List[str] = []
+            for row in previous:
+                row.status = "superseded"
+                row.superseded_at = _now()
+                superseded_ids.append(row.plan_id)
+                self._emit_event(
+                    session, session_id, ev.PLAN_SUPERSEDED, actor,
+                    ev.plan_superseded(row.plan_id, plan_id, "被新计划取代"),
+                )
+            target.status = "active"
+            target.activated_at = _now()
+            self._emit_event(
+                session, session_id, ev.PLAN_ACTIVATED, actor,
+                ev.plan_activated(plan_id, target.revision,
+                                  ",".join(superseded_ids)),
+            )
+            self._bump_version(session, session_id)
+        return self.plan_detail(session_id, plan_id)
+
+    def active_plan_id(self, session_id: str) -> str:
+        with self._tx() as session:
+            row = session.scalars(
+                select(PlanRow).where(
+                    PlanRow.session_id == session_id, PlanRow.status == "active"
+                )
+            ).first()
+            return row.plan_id if row is not None else ""
+
+    def plans(self, session_id: str) -> List[Dict[str, Any]]:
+        with self._tx() as session:
+            rows = session.scalars(
+                select(PlanRow).where(PlanRow.session_id == session_id)
+                .order_by(PlanRow.revision)
+            ).all()
+            return [self._plan_row_to_dict(row) for row in rows]
+
+    def plan_detail(self, session_id: str, plan_id: str) -> Dict[str, Any]:
+        """一份计划的完整快照：plan + steps + dependencies（恢复与报告都读它）。"""
+        with self._tx() as session:
+            plan = session.get(PlanRow, (session_id, plan_id))
+            if plan is None:
+                raise KeyError(f"计划不存在：{plan_id}")
+            steps = session.scalars(
+                select(StepRow).where(
+                    StepRow.session_id == session_id, StepRow.plan_id == plan_id
+                ).order_by(StepRow.ordinal, StepRow.step_id)
+            ).all()
+            dependencies = session.scalars(
+                select(DependencyRow).where(
+                    DependencyRow.session_id == session_id,
+                    DependencyRow.plan_id == plan_id,
+                ).order_by(DependencyRow.id)
+            ).all()
+            return {
+                "plan": self._plan_row_to_dict(plan),
+                "steps": [self._step_row_to_dict(row) for row in steps],
+                "dependencies": [self._dependency_row_to_dict(row) for row in dependencies],
+            }
+
+    def step_statuses(self, session_id: str, plan_id: str) -> Dict[str, str]:
+        with self._tx() as session:
+            rows = session.scalars(
+                select(StepRow).where(
+                    StepRow.session_id == session_id, StepRow.plan_id == plan_id
+                )
+            ).all()
+            return {row.step_id: row.status for row in rows}
+
+    def set_step_status(
+        self, session_id: str, plan_id: str, step_id: str, status: str,
+        *, reason: str = "", actor: str = "scheduler",
+        expected: Optional[str] = None,
+    ) -> bool:
+        """按 Step 状态机改状态；非法转移抛 `IllegalStepTransition`。
+
+        `expected` 给定时是乐观锁：库里当前状态与之不符就返回 False（不写）。
+        """
+        from atlas.orchestration.step_machine import transition
+
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            row = session.get(StepRow, (session_id, plan_id, step_id))
+            if row is None:
+                raise KeyError(f"step 不存在：{plan_id}/{step_id}")
+            current = row.status
+            if expected is not None and current != expected:
+                return False
+            record = transition(current, status, reason)
+            row.status = record.to_status
+            row.status_reason = reason
+            row.updated_at = record.at
+            if record.to_status == "running" and not row.started_at:
+                row.started_at = record.at
+            if record.to_status in ("done", "failed", "cancelled", "skipped"):
+                row.completed_at = record.at
+            if record.to_status == "stale":
+                row.stale_reason = reason
+            self._emit_event(
+                session, session_id, ev.STEP_STATUS, actor,
+                ev.step_status_changed(plan_id, step_id, record.from_status,
+                                       record.to_status, reason),
+            )
+            self._bump_version(session, session_id)
+            return True
+
+    def claim_step(self, session_id: str, plan_id: str, step_id: str,
+                   *, actor: str = "scheduler", reason: str = "") -> bool:
+        """原子 claim：只有仍是 pending/ready 的那一次能成功（两个 worker 不会同时派发）。
+
+        事务内先把 pending 依合法转移推到 ready，再推到 dispatched；条件更新用
+        "读到的那个状态"做守卫，读后被人改过就 rowcount=0 → 本次 claim 失败。
+        """
+        from atlas.orchestration.step_machine import transition
+        from atlas.planning.schemas import StepStatus
+
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            row = session.get(StepRow, (session_id, plan_id, step_id))
+            if row is None:
+                raise KeyError(f"step 不存在：{plan_id}/{step_id}")
+            observed = row.status
+            if observed not in (StepStatus.PENDING.value, StepStatus.READY.value):
+                return False
+            if observed == StepStatus.PENDING.value:
+                transition(observed, StepStatus.READY.value, "依赖与前置条件满足")
+            record = transition(StepStatus.READY.value, StepStatus.DISPATCHED.value,
+                                reason or "scheduler claim")
+            result = session.execute(
+                update(StepRow)
+                .where(
+                    StepRow.session_id == session_id,
+                    StepRow.plan_id == plan_id,
+                    StepRow.step_id == step_id,
+                    StepRow.status == observed,
+                )
+                .values(status=StepStatus.DISPATCHED.value,
+                        status_reason=record.reason, updated_at=record.at)
+            )
+            if result.rowcount != 1:
+                return False
+            self._emit_event(
+                session, session_id, ev.STEP_CLAIMED, actor,
+                ev.step_claimed(plan_id, step_id, observed),
+            )
+            self._bump_version(session, session_id)
+            return True
+
+    def record_attempt(
+        self, session_id: str, plan_id: str, step_id: str, *,
+        status: str = "created", trigger: str = "initial",
+        output: Optional[Dict[str, Any]] = None,
+        error: Optional[Dict[str, Any]] = None,
+        verification: Optional[Dict[str, Any]] = None,
+        usage: Optional[Dict[str, Any]] = None,
+        input_fingerprint: str = "", context_digest: str = "",
+        trace_id: str = "", actor: str = "executor",
+    ) -> Dict[str, Any]:
+        """追加一次 Attempt（不覆盖旧尝试），并同步 Step 的 attempt_count。"""
+        with self._tx() as session:
+            self._require_session(session, session_id)
+            step = session.get(StepRow, (session_id, plan_id, step_id))
+            if step is None:
+                raise KeyError(f"step 不存在：{plan_id}/{step_id}")
+            number = int(step.attempt_count or 0) + 1
+            attempt_id = str(uuid4())
+            now = _now()
+            session.add(AttemptRow(
+                attempt_id=attempt_id, session_id=session_id, plan_id=plan_id,
+                step_id=step_id, number=number, status=str(status), trigger=str(trigger),
+                input_fingerprint=input_fingerprint, context_digest=context_digest,
+                output=dict(output or {}), error=dict(error or {}),
+                verification=dict(verification or {}), usage=dict(usage or {}),
+                trace_id=trace_id, started_at=now,
+                finished_at=now if status in ("succeeded", "failed", "interrupted",
+                                             "indeterminate") else None,
+                created_at=now,
+            ))
+            step.attempt_count = number
+            step.latest_attempt_id = attempt_id
+            step.updated_at = now
+            self._emit_event(
+                session, session_id, ev.ATTEMPT_RECORDED, actor,
+                ev.attempt_recorded(plan_id, step_id, attempt_id, number, str(status)),
+            )
+            self._bump_version(session, session_id)
+            return {
+                "attempt_id": attempt_id, "number": number, "status": str(status),
+                "step_id": step_id, "plan_id": plan_id,
+            }
+
+    def update_attempt(
+        self, session_id: str, plan_id: str, attempt_id: str, *,
+        status: Optional[str] = None,
+        output: Optional[Dict[str, Any]] = None,
+        error: Optional[Dict[str, Any]] = None,
+        usage: Optional[Dict[str, Any]] = None,
+        verification: Optional[Dict[str, Any]] = None,
+        context_digest: Optional[str] = None,
+        input_fingerprint: Optional[str] = None,
+    ) -> bool:
+        """把一次 Attempt 从 running 补成终局；只改给了的字段，历史不覆盖。"""
+        with self._tx() as session:
+            row = session.scalar(
+                select(AttemptRow).where(
+                    AttemptRow.session_id == session_id,
+                    AttemptRow.plan_id == plan_id,
+                    AttemptRow.attempt_id == attempt_id,
+                )
+            )
+            if row is None:
+                raise KeyError(f"attempt 不存在：{attempt_id}")
+            if status is not None:
+                row.status = str(status)
+                if str(status) != "running":
+                    row.finished_at = row.finished_at or _now()
+            if output is not None:
+                row.output = dict(output)
+            if error is not None:
+                row.error = dict(error)
+            if usage is not None:
+                row.usage = dict(usage)
+            if verification is not None:
+                row.verification = dict(verification)
+            if context_digest is not None:
+                row.context_digest = str(context_digest)
+            if input_fingerprint is not None:
+                row.input_fingerprint = str(input_fingerprint)
+            return True
+
+    def attempts(self, session_id: str, plan_id: str, step_id: str = ""
+                 ) -> List[Dict[str, Any]]:
+        with self._tx() as session:
+            query = select(AttemptRow).where(
+                AttemptRow.session_id == session_id, AttemptRow.plan_id == plan_id
+            )
+            if step_id:
+                query = query.where(AttemptRow.step_id == step_id)
+            rows = session.scalars(query.order_by(AttemptRow.id)).all()
+            return [
+                {
+                    "attempt_id": row.attempt_id, "step_id": row.step_id,
+                    "number": row.number, "status": row.status, "trigger": row.trigger,
+                    "output": dict(row.output or {}), "error": dict(row.error or {}),
+                    "verification": dict(row.verification or {}),
+                    "context_digest": row.context_digest,
+                    "started_at": row.started_at, "finished_at": row.finished_at,
+                }
+                for row in rows
+            ]
+
+    def mark_downstream_stale(self, session_id: str, plan_id: str,
+                              changed_step_ids: List[str], *,
+                              reason: str = "上游输入变化") -> List[str]:
+        """上游 step 变化后，把已完成的下游打成 stale（§5.5 传播失效）。"""
+        from atlas.orchestration.scheduler import stale_after_change
+
+        detail = self.plan_detail(session_id, plan_id)
+        statuses = {item["step_id"]: item["status"] for item in detail["steps"]}
+        stale_ids = stale_after_change(changed_step_ids, statuses,
+                                       [(item["from_step_id"], item["to_step_id"])
+                                        for item in detail["dependencies"]])
+        for step_id in stale_ids:
+            self.set_step_status(session_id, plan_id, step_id, "stale", reason=reason)
+        return stale_ids
+
     # ---------- 镜像（评测接入用） ----------
 
     def import_engine(self, session_id: str, engine) -> Dict[str, int]:
@@ -693,6 +1052,49 @@ class GraphRepository:
         if row is None:
             raise KeyError(f"会话不存在：{session_id}")
         return row
+
+    @staticmethod
+    def _plan_row_to_dict(row: PlanRow) -> Dict[str, Any]:
+        return {
+            "plan_id": row.plan_id, "revision": row.revision,
+            "parent_plan_id": row.parent_plan_id or "",
+            "status": row.status, "strategy": row.strategy, "summary": row.summary,
+            "spec": dict(row.spec or {}),
+            "validation_report": dict(row.validation_report or {}),
+            "validator_version": row.validator_version,
+            "generated_by": row.generated_by,
+            "estimated_budget": dict(row.estimated_budget or {}),
+            "reason": row.reason, "created_at": row.created_at,
+            "activated_at": row.activated_at or "",
+        }
+
+    @staticmethod
+    def _step_row_to_dict(row: StepRow) -> Dict[str, Any]:
+        return {
+            "step_id": row.step_id, "plan_id": row.plan_id, "ordinal": row.ordinal,
+            "kind": row.kind, "title": row.title, "status": row.status,
+            "tool_name": row.tool_name, "attempt_count": row.attempt_count,
+            "max_attempts": row.max_attempts, "status_reason": row.status_reason,
+            "stale_reason": row.stale_reason, "failure": dict(row.failure or {}),
+            "latest_attempt_id": row.latest_attempt_id or "",
+            "input_fingerprint": row.input_fingerprint,
+            "spec": dict(row.spec or {}), "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+
+    @staticmethod
+    def _dependency_row_to_dict(row: DependencyRow) -> Dict[str, Any]:
+        return {
+            "from_step_id": row.from_step_id, "to_step_id": row.to_step_id,
+            "kind": row.kind, "binding": dict(row.binding or {}),
+            "condition": dict(row.condition or {}),
+        }
+
+    def _next_plan_revision(self, session: Session, session_id: str) -> int:
+        current = session.scalar(
+            select(func.max(PlanRow.revision)).where(PlanRow.session_id == session_id)
+        )
+        return int(current or 0) + 1
 
     def _next_seq(self, session: Session, session_id: str) -> int:
         current = session.scalar(
