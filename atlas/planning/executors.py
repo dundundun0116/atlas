@@ -23,6 +23,7 @@ from atlas.orchestration.orchestrator import (
 from atlas.planning.policies_call import call_model
 from atlas.planning.runner import StepOutcome
 from atlas.tools.calls import EffectClass, ToolSpec
+from atlas.tools.compensation import decide_after_call, run_compensation
 from atlas.tools.dispatcher import ToolDispatcher
 from atlas.tools.protocol import ResearchRequest, ResearchResult, ResearchToolError
 
@@ -43,6 +44,7 @@ class ResearchStepExecutor:
         max_rounds: int = 2,
         budget: Optional[Budget] = None,
         repository: Any = None,
+        write_tool: Any = None,
     ):
         self.llm = llm
         self.problem = problem
@@ -55,6 +57,8 @@ class ResearchStepExecutor:
         self.budget = budget
         # 给了 repository 就把工具调用记成持久化 ToolCall（可对账、崩溃后不重发）
         self.repository = repository
+        # 写工具（可选）：有它才跑 write / confirm 这两步
+        self.write_tool = write_tool
 
     # ---------- 分派 ----------
 
@@ -79,7 +83,7 @@ class ResearchStepExecutor:
                 "kind": "missing_inputs",
                 "message": f"缺少必填输入：{absent}",
             })
-        if step.step_id == "retrieve":
+        if step.step_id in ("retrieve", "write", "confirm"):
             return handler(step, inputs, scope)
         return handler(step, inputs)
 
@@ -198,6 +202,88 @@ class ResearchStepExecutor:
                 "kind": "model_error", "message": "终检输出无法解析"})
         payload["approved"] = payload.get("verdict") == "pass"
         return StepOutcome(output=payload)
+
+    # ---------- 写操作 ----------
+
+    def _do_write(self, step, inputs: Dict[str, Any], scope: Dict[str, Any] = None) -> StepOutcome:
+        """外部写入：派发 → 落 ToolCall → 部分生效时**当场补偿**。
+
+        `applied_ok` 是给判据吃的原料：只有"整笔写入成功"才为 True；
+        部分生效哪怕补偿成功也为 False——这一步确实没做成，只是世界被收拾干净了。
+        """
+        if self.write_tool is None:
+            return StepOutcome(status="failed", error={
+                "kind": "tool_unavailable", "message": "本部署没有配置写工具"})
+        scope = dict(scope or {})
+        target = str(inputs.get("target") or step.tool_args_template.get("target") or "")
+        value = dict(inputs.get("value") or step.tool_args_template.get("value") or {})
+        if not target or not value:
+            return StepOutcome(status="failed", error={
+                "kind": "invalid_request", "message": "write 步缺少 target/value"})
+        if self.repository is None or not scope.get("session_id"):
+            return StepOutcome(status="failed", error={
+                "kind": "unavailable", "message": "写操作必须带持久化上下文（无法对账）"})
+
+        spec = getattr(self.write_tool, "SPEC", None) or ToolSpec(
+            name=str(step.tool_name or "demo_writer"),
+            effect_class=EffectClass.EXTERNAL_SIDE_EFFECT,
+            supports_idempotency=True, supports_lookup=True, supports_compensation=True,
+        )
+        dispatcher = ToolDispatcher(
+            self.repository, scope["session_id"], spec,
+            plan_id=str(scope.get("plan_id") or ""),
+            step_id=str(scope.get("step_id") or ""),
+        )
+        outcome = dispatcher.invoke(lambda: self.write_tool.write(target, value),
+                                    {"target": target, "value": value})
+        output: Dict[str, Any] = {"target": target, "value": value,
+                                  "applied_ok": False, "compensated": False}
+        if outcome.ok:
+            output["applied_ok"] = True
+            return StepOutcome(output=output)
+
+        if outcome.needs_compensation:
+            # 协议：部分生效只能补偿；补偿本身也要落库、也要结算
+            call = self.repository.get_tool_call(scope["session_id"], outcome.tool_call_id)
+            decision = decide_after_call(call, spec,
+                                         compensation_args={"key": target})
+            if not decision.should_compensate:
+                output["compensation_failed"] = decision.reason
+                return StepOutcome(status="failed", output=output,
+                                   error={"kind": "partial", "message": decision.reason})
+            result = run_compensation(
+                self.repository, scope["session_id"], call, spec,
+                compensation_args=decision.compensation_args,
+                perform=lambda args: self.write_tool.undo(args["key"]),
+            )
+            output["compensated"] = result["status"] == "settled"
+            output["compensation_id"] = result["compensation_id"]
+            output["compensated_ok"] = output["compensated"]
+            if not output["compensated"]:
+                return StepOutcome(status="needs_human", output=output,
+                                   error={"kind": "compensation_failed",
+                                          "message": str(result.get("error"))})
+            return StepOutcome(status="failed", output=output,
+                               error={"kind": "partial_compensated",
+                                      "message": "部分写入已补偿，世界已复原"})
+        return StepOutcome(status="failed", output=output,
+                           error=dict(outcome.error or {}))
+
+    def _do_confirm(self, step, inputs: Dict[str, Any], scope: Dict[str, Any] = None) -> StepOutcome:
+        """读回目标对象：确认外部世界真的变了，而不是相信 write 的返回值。"""
+        if self.write_tool is None:
+            return StepOutcome(status="failed", error={
+                "kind": "tool_unavailable", "message": "本部署没有配置写工具"})
+        target = str(inputs.get("target") or step.tool_args_template.get("target") or "")
+        if not target:
+            return StepOutcome(status="failed", error={
+                "kind": "invalid_request", "message": "confirm 步缺少 target"})
+        observed = self.write_tool.observe(target)
+        return StepOutcome(output={
+            "target": target,
+            "observed": dict(observed or {}) if observed else None,
+            "confirmed": observed is not None,
+        })
 
     # ---------- 内部 ----------
 

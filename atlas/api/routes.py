@@ -39,6 +39,7 @@ def create_app(repository: GraphRepository,
                research_tool: Any = None,
                orchestrate_llm: Optional[Callable[[str], str]] = None,
                orchestrate_budget: Any = None,
+               write_tool: Any = None,
                context_budget_tokens: Optional[int] = None,
                context_token_counter: Optional[Callable[[str], int]] = None) -> FastAPI:
     app = FastAPI(title="Atlas Task Runtime API", version="0.3.0")
@@ -366,6 +367,7 @@ def create_app(repository: GraphRepository,
             budget=replace(orchestrate_budget) if orchestrate_budget is not None else None,
             # 给了 repository 就会把工具调用记成持久化 ToolCall（可对账、不盲重发）
             repository=repository,
+            write_tool=write_tool,
         )
 
     def _activate(session_id: str, plan_id: str) -> dict:

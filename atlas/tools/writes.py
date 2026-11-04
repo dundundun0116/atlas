@@ -47,6 +47,7 @@ class ControllableWriteTool:
     mode: str = "ok"
     world: Dict[str, Any] = field(default_factory=dict)
     operations: List[str] = field(default_factory=list)
+    SPEC = WRITE_TOOL_SPEC
 
     def __post_init__(self) -> None:
         if self.mode not in MODES:
