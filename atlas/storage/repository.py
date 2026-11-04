@@ -119,6 +119,22 @@ class GraphRepository:
         with self._tx() as session:
             return session.get(SessionRow, session_id)
 
+    def set_workflow_version(self, session_id: str, version: str) -> str:
+        """切换这套会话跑的控制流（legacy_research_v1 → plan_dag_v1）；留事件可追溯。"""
+        with self._tx() as session:
+            row = self._require_session(session, session_id)
+            previous = str(row.workflow_version or "")
+            if previous == version:
+                return version
+            row.workflow_version = str(version)
+            row.updated_at = _now()
+            self._emit_event(
+                session, session_id, "workflow_version", "system",
+                {"from": previous, "to": str(version)},
+            )
+            self._bump_version(session, session_id)
+            return str(version)
+
     def workflow_version(self, session_id: str) -> str:
         """这个会话的控制流版本；库不存在时返回空串（不猜）。"""
         row = self.get_session(session_id)

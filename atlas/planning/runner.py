@@ -11,8 +11,12 @@
 执行顺序（每一步都落库，崩溃点明确）：
 `ready → dispatched(claim) → running → verifying → done | failed | needs_human`
 
-`executor` 是注入的：它拿到 StepSpec 与上下文，返回 `StepOutcome`。生产实现会调模型/工具，
-测试用脚本替身——这就是"一次只迁移一条真实执行路径"的落点。
+`executor` 是注入的：它拿到 `StepSpec` 与上下文，返回 `StepOutcome`。上下文里的
+`inputs` 由**依赖上的 binding 解析**得到——上游 step 最新一次成功的 attempt 的
+`output[output_name]` → 下游 `input_name`。这样 `data` 边不是装饰：没有上游输出时
+下游根本拿不到输入，会明确失败而不是拿个空字典接着跑。
+
+生产实现会调模型/工具，测试用脚本替身——这就是"一次只迁移一条真实执行路径"的落点。
 """
 
 from dataclasses import dataclass, field
@@ -151,6 +155,7 @@ class PlanRunner:
             report.failed.append(step_id)
             return
         context = dict(self.context_provider(step) or {})
+        context["inputs"] = self._resolve_inputs(plan, step, self._step_outputs())
         try:
             outcome = self.executor(step, context)
         except Exception as exc:  # 执行器炸了：确定"没拿到结果"，不是 indeterminate
@@ -229,6 +234,7 @@ class PlanRunner:
             if step is None:
                 continue
             context = dict(self.context_provider(step) or {})
+            context["inputs"] = self._resolve_inputs(plan, step, self._step_outputs())
             try:
                 outcome = self.executor(step, context)
             except Exception as exc:
@@ -252,6 +258,39 @@ class PlanRunner:
             self._finish(step_id, target, verification, outcome, report, attempt)
 
     # ---------- 内部 ----------
+
+    def _step_outputs(self) -> Dict[str, Dict[str, Any]]:
+        """每个已完成 step 最新一次 attempt 的 output（供下游 binding 取值）。"""
+        outputs: Dict[str, Dict[str, Any]] = {}
+        for step_id in self._done_ids():
+            attempts = self.repository.attempts(self.session_id, self.plan_id, step_id)
+            if not attempts:
+                continue
+            outputs[step_id] = dict(attempts[-1].get("output") or {})
+        return outputs
+
+    def _resolve_inputs(
+        self, plan: PlanSpec, step: StepSpec, outputs: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """按 dependency.binding 把上游输出接到本步输入；缺必需输入就记 warning。"""
+        resolved: Dict[str, Any] = {}
+        missing: List[str] = []
+        for dependency in plan.dependencies:
+            if dependency.to_step_id != step.step_id or not dependency.binding:
+                continue
+            output_name = dependency.binding.get("output_name", "")
+            input_name = dependency.binding.get("input_name", "")
+            upstream = outputs.get(dependency.from_step_id, {})
+            if output_name in upstream:
+                resolved[input_name] = upstream[output_name]
+                continue
+            _binding = step.input_named(input_name)
+            if _binding is not None and not _binding.required:
+                continue
+            missing.append(f"{dependency.from_step_id}.{output_name} -> {input_name}")
+        if missing:
+            resolved.setdefault("__missing_inputs__", missing)
+        return resolved
 
     def _plan_spec(self) -> PlanSpec:
         detail = self.repository.plan_detail(self.session_id, self.plan_id)

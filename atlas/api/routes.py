@@ -14,9 +14,16 @@ from fastapi.responses import JSONResponse
 from atlas.api import schemas
 from atlas.api.graph import RepositoryGraph
 from atlas.orchestration import Orchestrator
+from atlas.planning.executors import ResearchStepExecutor
+from atlas.planning.research_plan import RESEARCH_PLAN_WORKFLOW, allowed_tools, build_research_plan
+from atlas.planning.runner import PlanRunner
+from atlas.planning.schemas import PlanSchemaError, PlanSpec
+from atlas.planning.validator import validate_plan
 from atlas.runtime import (
     AgentRuntime,
+    InvalidRequest,
     ModelTimeout,
+    NotFound,
     RuntimeFailure,
     StateConflict,
     Unrecoverable,
@@ -239,6 +246,198 @@ def create_app(repository: GraphRepository,
             retries=trace.retries,
             workflow_version=str(view.get("workflow_version") or ""),
         )
+
+    # ---------- 计划（DAG 主路径：plan_dag_v1） ----------
+
+    def _plan_view(payload: dict) -> dict:
+        return {
+            "plan_id": payload["plan_id"],
+            "revision": payload["revision"],
+            "status": payload["status"],
+            "summary": payload["summary"],
+            "strategy": payload["strategy"],
+            "generated_by": payload["generated_by"],
+            "validator_version": payload["validator_version"],
+            "created_at": payload["created_at"],
+            "activated_at": payload["activated_at"],
+            "validation": payload.get("validation_report", {}),
+        }
+
+    def _step_views(detail: dict) -> list:
+        return [
+            {
+                "step_id": item["step_id"], "title": item["title"],
+                "kind": item["kind"], "status": item["status"],
+                "ordinal": item["ordinal"], "tool_name": item["tool_name"],
+                "attempt_count": item["attempt_count"],
+                "status_reason": item["status_reason"],
+                "stale_reason": item["stale_reason"],
+            }
+            for item in detail["steps"]
+        ]
+
+    def _detail_view(session_id: str, detail: dict) -> dict:
+        return {
+            "session_id": session_id,
+            "plan": _plan_view(detail["plan"]),
+            "steps": _step_views(detail),
+            "dependencies": [
+                {
+                    "from_step_id": item["from_step_id"],
+                    "to_step_id": item["to_step_id"],
+                    "kind": item["kind"],
+                    "binding": dict(item["binding"] or {}),
+                }
+                for item in detail["dependencies"]
+            ],
+        }
+
+    @app.post("/tasks/{session_id}/plans", response_model=schemas.PlanDetailView)
+    def submit_plan(session_id: str, payload: schemas.PlanSubmitRequest):
+        """提交计划候选 → 校验 → 落库；未过校验的绝不激活（§5.4）。"""
+        runtime.get_state(session_id)  # 不存在 → 404
+        if payload.plan is not None:
+            try:
+                spec = PlanSpec.from_dict(payload.plan)
+            except PlanSchemaError as exc:
+                raise InvalidRequest(f"计划结构不合法：{exc}", request_id=payload.request_id)
+            tools = None
+        else:
+            problem = (payload.problem or "").strip()
+            if not problem:
+                raise InvalidRequest("要么给 plan，要么给 problem", request_id=payload.request_id)
+            if payload.with_research and research_tool is None:
+                raise Unrecoverable(
+                    "本部署未配置 ResearchTool，无法生成含检索步的计划",
+                    request_id=payload.request_id,
+                )
+            spec = build_research_plan(
+                problem,
+                with_research=payload.with_research,
+                with_repair=payload.with_repair,
+                budget_tokens=payload.budget_tokens,
+            )
+            tools = allowed_tools(with_research=payload.with_research)
+
+        report = validate_plan(spec, allowed_tools=tools)
+        detail = repository.save_plan(
+            session_id, spec, validation_report=report.to_dict(),
+            status="validated" if report.ok else "rejected",
+            reason=report.error_codes() and "；".join(report.error_codes()) or "",
+        )
+        plan_id = detail["plan"]["plan_id"]
+        if payload.activate and report.ok:
+            detail = _activate(session_id, plan_id)
+        return _detail_view(session_id, repository.plan_detail(session_id, plan_id))
+
+    @app.get("/tasks/{session_id}/plans", response_model=schemas.PlanListView)
+    def list_plans(session_id: str):
+        runtime.get_state(session_id)  # 不存在 → 404
+        return schemas.PlanListView(
+            session_id=session_id,
+            plans=[_plan_view(item) for item in repository.plans(session_id)],
+        )
+
+    @app.get("/tasks/{session_id}/plans/{plan_id}", response_model=schemas.PlanDetailView)
+    def get_plan(session_id: str, plan_id: str):
+        runtime.get_state(session_id)
+        try:
+            detail = repository.plan_detail(session_id, plan_id)
+        except KeyError as exc:
+            raise NotFound(str(exc), request_id="")
+        return _detail_view(session_id, detail)
+
+    def _activate(session_id: str, plan_id: str) -> dict:
+        """激活计划 + 把会话的工作流版本切到 DAG（两件事必须一起发生）。"""
+        detail = repository.activate_plan(session_id, plan_id)
+        repository.set_workflow_version(session_id, RESEARCH_PLAN_WORKFLOW)
+        return detail
+
+    @app.post("/tasks/{session_id}/plans/{plan_id}/activate", response_model=schemas.PlanDetailView)
+    def activate_plan(session_id: str, plan_id: str, payload: schemas.RequestMeta):
+        runtime.get_state(session_id)
+        try:
+            detail = _activate(session_id, plan_id)
+        except KeyError as exc:
+            raise NotFound(str(exc), request_id=payload.request_id)
+        except ValueError as exc:
+            raise StateConflict(str(exc), request_id=payload.request_id)
+        return _detail_view(session_id, detail)
+
+    @app.post("/tasks/{session_id}/plans/{plan_id}/advance",
+              response_model=schemas.PlanAdvanceView)
+    def advance_plan(session_id: str, plan_id: str, payload: schemas.PlanAdvanceRequest):
+        """推进已激活的计划：串行跑有限步，每步都落库；崩溃后重进只补未提交的那步。"""
+        if orchestrate_llm is None:
+            raise Unrecoverable(
+                "本部署未配置模型（启动参数或 LLM_API_KEY/LLM_MODEL）",
+                request_id=payload.request_id,
+            )
+        runtime.get_state(session_id)
+        try:
+            detail = repository.plan_detail(session_id, plan_id)
+        except KeyError as exc:
+            raise NotFound(str(exc), request_id=payload.request_id)
+        if detail["plan"]["status"] != "active":
+            raise StateConflict(
+                f"计划 {plan_id} 当前状态 {detail['plan']['status']}，先激活再推进",
+                request_id=payload.request_id,
+            )
+
+        graph = RepositoryGraph(
+            repository, session_id,
+            **({"context_budget_tokens": context_budget_tokens}
+               if context_budget_tokens else {}),
+            **({"context_token_counter": context_token_counter}
+               if context_token_counter else {}),
+        )
+        executor = ResearchStepExecutor(
+            orchestrate_llm,
+            problem=detail["plan"]["summary"],
+            research_tool=research_tool,
+            context_provider=lambda role, focus: graph.context_package(role, focus=focus).text,
+            session_id=session_id,
+            budget=replace(orchestrate_budget) if orchestrate_budget is not None else None,
+        )
+        runner = PlanRunner(repository, session_id, plan_id, executor,
+                            max_ticks=max(2, payload.max_steps * 4))
+        report = runner.run()
+        _sync_task_state(runtime, session_id, report)
+        after = repository.plan_detail(session_id, plan_id)
+        state = runtime.get_state(session_id)
+        return schemas.PlanAdvanceView(
+            session_id=session_id,
+            plan_id=plan_id,
+            state=state["state"],
+            workflow_version=state.get("workflow_version", ""),
+            executed=list(report.executed),
+            needs_human=list(report.needs_human),
+            failed=list(report.failed),
+            recovered_in_flight=list(report.recovered_in_flight),
+            stopped_reason=report.stopped_reason,
+            complete=report.complete,
+            steps=_step_views(after),
+        )
+
+    def _sync_task_state(runtime_: Any, session_id: str, report) -> None:
+        """把计划推进结果同步到任务生命周期：收敛或明确停住，不悬在中间态。"""
+        state = runtime_.get_state(session_id)["state"]
+        if state in terminal_states:
+            return
+        try:
+            if report.complete:
+                for trigger, expected in (("plan_ready", "planning"),
+                                          ("work_done", "executing"),
+                                          ("audit_pass", "auditing")):
+                    if runtime_.get_state(session_id)["state"] != expected:
+                        continue
+                    runtime_.advance_task(session_id, trigger, reason="DAG 计划完成")
+            elif report.stopped_reason == "needs_human":
+                runtime_.pause_task(session_id, reason="计划里有步骤需要人工确认")
+            elif report.stopped_reason == "failed":
+                runtime_.advance_task(session_id, "fail", reason="计划推进失败")
+        except RuntimeFailure:
+            pass
 
     # ---------- 读 ----------
 

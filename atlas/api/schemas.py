@@ -110,6 +110,81 @@ class ResearchCallView(BaseModel):
     failure_message: str = ""
 
 
+class PlanSubmitRequest(RequestMeta):
+    """提交计划候选：给 JSON 就用它，不给就从 problem 生成研究工作流。"""
+
+    problem: str = ""
+    plan: Optional[Dict[str, Any]] = None
+    with_research: bool = True
+    with_repair: bool = True
+    activate: bool = False
+    budget_tokens: int = Field(default=4000, ge=1)
+
+
+class PlanAdvanceRequest(RequestMeta):
+    """推进已激活的计划：跑有限步（串行），返回这一步之后的状态。"""
+
+    max_steps: int = Field(default=20, ge=1, le=200)
+
+
+class PlanView(BaseModel):
+    plan_id: str
+    revision: int = 0
+    status: str = ""
+    summary: str = ""
+    strategy: str = ""
+    generated_by: str = ""
+    validator_version: str = ""
+    created_at: str = ""
+    activated_at: str = ""
+    validation: Dict[str, Any] = Field(default_factory=dict)
+
+
+class StepView(BaseModel):
+    step_id: str
+    title: str = ""
+    kind: str = ""
+    status: str = ""
+    ordinal: int = 0
+    tool_name: str = ""
+    attempt_count: int = 0
+    status_reason: str = ""
+    stale_reason: str = ""
+
+
+class DependencyView(BaseModel):
+    from_step_id: str
+    to_step_id: str
+    kind: str = ""
+    binding: Dict[str, str] = Field(default_factory=dict)
+
+
+class PlanDetailView(BaseModel):
+    session_id: str
+    plan: PlanView
+    steps: List[StepView] = Field(default_factory=list)
+    dependencies: List[DependencyView] = Field(default_factory=list)
+
+
+class PlanListView(BaseModel):
+    session_id: str
+    plans: List[PlanView] = Field(default_factory=list)
+
+
+class PlanAdvanceView(BaseModel):
+    session_id: str
+    plan_id: str
+    state: str = ""
+    workflow_version: str = ""
+    executed: List[str] = Field(default_factory=list)
+    needs_human: List[str] = Field(default_factory=list)
+    failed: List[str] = Field(default_factory=list)
+    recovered_in_flight: List[str] = Field(default_factory=list)
+    stopped_reason: str = ""
+    complete: bool = False
+    steps: List[StepView] = Field(default_factory=list)
+
+
 class NodeView(BaseModel):
     id: str
     type: str
