@@ -47,8 +47,12 @@ class CallOutcome:
 
     @property
     def ok(self) -> bool:
-        return self.status is ToolCallStatus.SETTLED and self.outcome in (
-            Outcome.APPLIED.value, "")
+        # 对账确认"已生效"与直接结算同样算成功——区别只在结论是怎么来的
+        if self.status is ToolCallStatus.SETTLED:
+            return self.outcome in (Outcome.APPLIED.value, "")
+        if self.status is ToolCallStatus.RECONCILED:
+            return self.outcome == Outcome.APPLIED.value
+        return False
 
     @property
     def needs_human(self) -> bool:

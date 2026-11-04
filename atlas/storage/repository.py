@@ -627,6 +627,7 @@ class GraphRepository:
     def finish_reconcile(
         self, session_id: str, tool_call_id: str, *, outcome: str,
         detail: str = "", evidence: Optional[Dict[str, Any]] = None,
+        result: Optional[Dict[str, Any]] = None,
         actor: str = "reconciler",
     ) -> Dict[str, Any]:
         """对账收官：给出 applied/not_applied/partially_applied/unknowable。
@@ -644,6 +645,9 @@ class GraphRepository:
             transition(row.status, target)
             row.status = target
             row.outcome = outcome
+            if result is not None:
+                # 对账时查回来的结果要落库：重跑这一步才能复用它、而不是再发一次
+                row.result = dict(result)
             row.error = {"kind": "reconcile", "message": detail,
                          "evidence": dict(evidence or {})}
             row.updated_at = _now()

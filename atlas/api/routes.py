@@ -6,7 +6,7 @@
 
 import time
 from dataclasses import replace
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -447,6 +447,19 @@ def create_app(repository: GraphRepository,
                 request_id=payload.request_id,
             )
 
+        # 对账完成后，人工可以点名重开 needs_human 的步骤（needs_human → pending 是合法转移）。
+        # 不自动重开：那等于替人拍板"这个未知已经解决了"。
+        reopened: List[str] = []
+        for step_id in payload.reopen_steps:
+            current = repository.step_statuses(session_id, plan_id).get(step_id, "")
+            if current != "needs_human":
+                continue
+            repository.set_step_status(
+                session_id, plan_id, step_id, "pending",
+                reason="人工指定重开（对账已定论）", actor="recover",
+            )
+            reopened.append(step_id)
+
         status = assess_recovery(repository, session_id)
         if status.plan_id != plan_id:
             # 传进来的不是当前激活计划：评估结果对不上，明确拒绝而不是混着报
@@ -455,6 +468,7 @@ def create_app(repository: GraphRepository,
                 request_id=payload.request_id,
             )
         result = schemas.PlanRecoverView(**status.to_dict(),
+                                         reopened=reopened,
                                          state=runtime.get_state(session_id)["state"])
         if payload.dry_run or status.blocked:
             return result
@@ -469,6 +483,7 @@ def create_app(repository: GraphRepository,
         _sync_task_state(runtime, session_id, report)
         return schemas.PlanRecoverView(
             **status.to_dict(),
+            reopened=reopened,
             executed=list(report.executed),
             recovered_in_flight=list(report.recovered_in_flight),
             stopped_reason=report.stopped_reason,
@@ -482,6 +497,10 @@ def create_app(repository: GraphRepository,
         if state in terminal_states:
             return
         try:
+            if report.complete and state == "paused":
+                # 之前因为 needs_human 暂停过；现在计划跑完了，先把任务恢复再收敛
+                runtime_.resume_task(session_id)
+                state = runtime_.get_state(session_id)["state"]
             if report.complete:
                 for trigger, expected in (("plan_ready", "planning"),
                                           ("work_done", "executing"),
@@ -547,6 +566,7 @@ def create_app(repository: GraphRepository,
         repository.begin_reconcile(session_id, tool_call_id)
         updated = repository.finish_reconcile(
             session_id, tool_call_id, outcome=outcome, detail=detail,
+            result=payload.result,
         )
         return schemas.ToolCallView(**updated)
 

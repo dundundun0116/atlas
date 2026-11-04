@@ -217,6 +217,8 @@ class ReconcileRequest(RequestMeta):
     outcome: str = ""          # applied / not_applied / partially_applied / unknowable
     observed: Optional[Any] = None
     expected: Optional[Any] = None
+    #: 对账时查回来的结果；落库后重跑同一步会复用它，而不是再发一次请求
+    result: Optional[Dict[str, Any]] = None
     detail: str = ""
 
 
@@ -224,6 +226,8 @@ class PlanRecoverRequest(RequestMeta):
     """按持久化状态恢复：dry_run=true 只看结论，不动任何状态。"""
 
     dry_run: bool = False
+    #: 对账完成后，显式指定要重开的 needs_human 步骤（不自动重开——那等于替人拍板）
+    reopen_steps: List[str] = Field(default_factory=list)
 
 
 class PlanRecoverView(BaseModel):
@@ -240,6 +244,8 @@ class PlanRecoverView(BaseModel):
     needs_human_steps: List[str] = Field(default_factory=list)
     failed_steps: List[str] = Field(default_factory=list)
     done_steps: List[str] = Field(default_factory=list)
+    #: 本次按请求重开的步骤（needs_human → pending）
+    reopened: List[str] = Field(default_factory=list)
     #: dry_run=false 且真的跑了：执行与收敛情况
     executed: List[str] = Field(default_factory=list)
     recovered_in_flight: List[str] = Field(default_factory=list)
