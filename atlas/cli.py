@@ -6,6 +6,7 @@
 """
 
 import argparse
+import json
 import os
 
 from atlas.export import export_graph
@@ -43,6 +44,13 @@ def _cmd_report(args) -> int:
     return 0
 
 
+def _write_text(path: str, content: str) -> None:
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(content)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="atlas", description="Atlas 工具集（图状态记忆 / 任务报告）")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -59,6 +67,16 @@ def main(argv=None) -> int:
                             help="CompassRAG 服务地址，用于把 trace_id 变成可点链接")
     report_cmd.add_argument("--title", default="Atlas 任务报告")
 
+    eval_cmd = sub.add_parser(
+        "eval",
+        help="确定性长程评测（任务生成器 + 独立 oracle + 故障注入）")
+    eval_cmd.add_argument("--tasks", type=int, default=8, help="题目数")
+    eval_cmd.add_argument("--seed", type=int, default=7, help="种子（决定题集与注入位置）")
+    eval_cmd.add_argument("--fault-every", type=int, default=3,
+                          help="每 N 题注入一次故障（0 = 不注入）")
+    eval_cmd.add_argument("--json", dest="json_path", default="", help="报告 JSON 输出路径")
+    eval_cmd.add_argument("--md", dest="md_path", default="", help="报告 Markdown 输出路径")
+
     args = parser.parse_args(argv)
     if args.command == "export":
         path = export_graph(args.graph, args.out)
@@ -66,6 +84,22 @@ def main(argv=None) -> int:
         return 0
     if args.command == "report":
         return _cmd_report(args)
+    if args.command == "eval":
+        # 延迟导入：评测要拉起 FastAPI 与建库，别让 `atlas report` 也跟着付这笔钱
+        from atlas.evaluation.longhorizon import SuiteConfig, run_suite
+
+        report = run_suite(SuiteConfig(count=args.tasks, seed=args.seed,
+                                       fault_every=args.fault_every))
+        text = report.to_markdown()
+        print(text)
+        if args.json_path:
+            _write_text(args.json_path, json.dumps(
+                report.to_dict(), ensure_ascii=False, indent=2))
+            print(f"\nJSON 已写入 {args.json_path}")
+        if args.md_path:
+            _write_text(args.md_path, text + "\n")
+            print(f"Markdown 已写入 {args.md_path}")
+        return 0
     parser.error(f"未知子命令：{args.command}")
     return 2
 
